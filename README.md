@@ -1,6 +1,7 @@
 # gotth-jobs
 
-> **Distribution:** GitHub is the public clone, and future release endpoint.
+> **Distribution:** GitHub is the public clone and, only if implementation is
+> admitted later, the future release endpoint.
 > Forgejo remains canonical development and the issue/contribution location.
 > See [the distribution contract](docs/distribution.md).
 
@@ -29,7 +30,8 @@ promise, or dependency to pin.
 
 ## Installation, compatibility, and support
 
-Planned placeholder only. There is no implementation, API, support promise, or release.
+Planned placeholder only. There is no implementation, API, support promise, or
+release.
 
 There is nothing to install or import. Do not add this repository as a
 dependency.

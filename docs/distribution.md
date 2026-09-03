@@ -4,7 +4,7 @@
 
 - Canonical development and change tracking:
   <https://git.dannyhunn.com/agents/gotth-jobs>
-- Public clone, and future releases:
+- Public clone and, only after implementation admission, future releases:
   <https://github.com/gotthboard/gotth-jobs>
 
 Forgejo pushes one way to GitHub. GitHub does not feed commits or tags back to

@@ -1,42 +1,62 @@
 # gotth-jobs
 
-> **Distribution:** GitHub is the public clone and, only if implementation is
-> admitted later, the future release endpoint.
-> Forgejo remains canonical development and the issue/contribution location.
-> See [the distribution contract](docs/distribution.md).
+`gotth-jobs` is a PostgreSQL-backed durable background-job library for Go. Its
+public package lives at `pkg/jobs`; the module root contains no Go package.
 
+The library owns bounded job envelopes, idempotent enqueue, deterministic
+claim order, expiring leases, opaque fencing tokens, heartbeats, cooperative
+cancellation, bounded retry scheduling, dead-letter inspection and redrive,
+queue counts, and a single-job worker loop.
 
-Reserved for reusable durable background-job mechanics shared by GOTTH
-applications.
+## Delivery contract
 
-## Intended boundary
+Execution is **at least once**. A worker may perform an external side effect
+and lose its lease before acknowledging completion. Fencing protects the job
+record; it cannot make an arbitrary external system transactional. Handlers
+must therefore use a consumer-owned idempotency mechanism whenever duplicate
+effects are unacceptable.
 
-This project may eventually own job envelopes, atomic claiming, leases,
-heartbeats, cancellation, bounded retries, idempotency, dead-letter handling,
-and worker observability. Consumers retain job meaning, authorization,
-transactional enqueue decisions, payload minimization, and recovery policy.
+Every running attempt carries a random lease token. Heartbeat, completion, and
+failure transitions require the exact active token and reject an expired,
+canceled, or replaced lease. Cancellation invalidates the lease and cancels a
+cooperative in-process handler on its next heartbeat, but cannot reverse an
+effect the handler already performed.
 
-## Non-goals
+## Boundary
 
-- A distributed scheduler selected before workload requirements exist.
-- Product notification, media, federation, or webhook policy.
-- Claiming exactly-once side effects where the underlying systems cannot
-  provide them.
+The first durable backend is PostgreSQL 17 using `FOR UPDATE SKIP LOCKED`, which
+PostgreSQL documents specifically as suitable for multiple consumers of a
+queue-like table. The library provides immutable migration SQL but never
+applies it. Consumers own database credentials, migration orchestration,
+backups, retention, payload encryption, authorization, job meaning, and the
+decision to enqueue work.
+
+Consumers that need atomic domain mutation plus enqueue call `EnqueueTx` on
+their existing `pgx.Tx`. The library does not pretend that enqueueing after a
+separate domain commit is reliable.
+
+## Limits
+
+- queue and kind: 128 bytes each;
+- worker ID: 256 bytes;
+- idempotency key: 256 bytes;
+- payload: 1 MiB;
+- failure text: 4 KiB;
+- attempts: 1 through 100;
+- lease: 1 second through 1 hour;
+- retry delay: zero through 24 hours;
+- dead-letter page: 1 through 100 records.
 
 ## Status
 
-Placeholder only. There is no implementation, API, release, tag, compatibility
-promise, or dependency to pin.
+Unreleased pre-1.0 implementation. The API may change until a real consumer
+pins its first compatibility contract. No tag currently exists.
 
-## Installation, compatibility, and support
+## Development and distribution
 
-Planned placeholder only. There is no implementation, API, support promise, or
-release.
+- Canonical development: <https://git.dannyhunn.com/agents/gotth-jobs>
+- Public Go import and future releases: <https://github.com/gotthboard/gotth-jobs>
 
-There is nothing to install or import. Do not add this repository as a
-dependency.
-
-The repository has no selected license and no long-term support promise.
-Versioning, release admission, security reporting, and contribution details are
-in [the release policy](docs/RELEASING.md), [security policy](SECURITY.md), and
-[contribution guide](CONTRIBUTING.md).
+Forgejo remains authoritative and mirrors one way to GitHub. See
+[`docs/distribution.md`](docs/distribution.md),
+[`docs/RELEASING.md`](docs/RELEASING.md), and [`LICENSE`](LICENSE).

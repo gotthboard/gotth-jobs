@@ -14,6 +14,5 @@ and pull requests are not the canonical contribution path and may be disabled.
 If the Forgejo repository is not accessible to you, public contribution intake
 is not currently available; do not route patches through unrelated channels.
 
-No license has been selected for this repository. Public visibility alone does
-not grant permission to copy, modify, or redistribute the work. License choice
-is a maintainer decision and must not be inferred from neighboring projects.
+Contributions are accepted under the repository's MIT license. Do not include
+code you cannot license on those terms.

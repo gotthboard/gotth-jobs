@@ -2,9 +2,9 @@
 
 ## Supported versions
 
-Planned placeholder; no implementation or API. No version currently carries a
-separate long-term security-support promise. Once releases exist, supported
-versions will be listed here and in the changelog.
+Unreleased pre-1.0 implementation. No version currently carries a separate
+long-term security-support promise. Once releases exist, supported versions
+will be listed here and in the changelog.
 
 ## Reporting a vulnerability
 

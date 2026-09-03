@@ -7,9 +7,8 @@ If this repository contains a Go module, release tags use the Go-compatible
 `vMAJOR.MINOR.PATCH` form, including any SemVer prerelease suffix. Historical
 tags are immutable even when they predate this convention.
 
-No release may be tagged until the license decision gate is explicitly closed
-and required verification is complete. Reserved placeholders are not tagged at
-all.
+No release may be tagged until required verification and a real consumer pin
+are complete. The repository uses the MIT license.
 
 For an admitted release:
 

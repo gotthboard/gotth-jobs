@@ -129,6 +129,9 @@ func TestRetryPolicyDelaySaturates(t *testing.T) {
 	if _, err := (RetryPolicy{Initial: time.Second, Maximum: MaxRetryDelay + 1}).Delay(1); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("oversize policy = %v, want ErrInvalid", err)
 	}
+	if got, err := (RetryPolicy{Maximum: MaxRetryDelay}).Delay(int(^uint(0) >> 1)); err != nil || got != 0 {
+		t.Fatalf("zero initial delay = (%s, %v), want (0, nil)", got, err)
+	}
 }
 
 func TestPermanentPreservesErrorTraversal(t *testing.T) {

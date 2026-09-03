@@ -53,10 +53,9 @@ func writeFingerprintField(hash io.Writer, field []byte) {
 // validateEnqueue rejects requests that cannot be represented by the public
 // and database contracts.
 //
-// Complexity: for q queue bytes, k kind bytes, p payload bytes, and i key
-// bytes, time O(q+k+p+i), Omega(q+k), tight Theta(q+k+p+i) because UTF-8 and
-// NUL validation scans present variable fields; auxiliary space O(1),
-// Omega(1), tight Theta(1).
+// Complexity: for q queue bytes, k kind bytes, and i key bytes, time
+// O(q+k+i), Omega(q+k), tight Theta(q+k+i) because payload validation reads
+// only its length; auxiliary space O(1), Omega(1), tight Theta(1).
 func validateEnqueue(request EnqueueRequest) error {
 	if err := validateName("queue", request.Queue, MaxQueueBytes); err != nil {
 		return err

@@ -68,9 +68,10 @@ func scanJob(row pgx.Row) (Job, error) {
 // validateStoredJob checks invariants that remain security-relevant after a
 // database row crosses the library boundary.
 //
-// Complexity: for q queue, k kind, p payload, i key, w owner, e error, and
-// token bytes, time O(q+k+p+i+w+e+token), Omega(q+k), tight
-// Theta(q+k+p+i+w+e+token); auxiliary space O(1), Omega(1), tight Theta(1).
+// Complexity: for q queue, k kind, i key, w owner, e error, and token bytes,
+// time O(q+k+i+w+e+token), Omega(q+k), tight Theta(q+k+i+w+e+token) because
+// payload validation reads only its length; auxiliary space O(1), Omega(1),
+// tight Theta(1).
 func validateStoredJob(job Job) error {
 	if len(job.ID) != 32 || !isLowerHex(job.ID) {
 		return fmt.Errorf("stored job ID violates the schema contract")

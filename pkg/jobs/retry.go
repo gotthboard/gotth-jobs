@@ -13,6 +13,9 @@ func (policy RetryPolicy) Delay(attempt int) (time.Duration, error) {
 	if attempt < 1 || policy.Initial < 0 || policy.Maximum < 0 || policy.Maximum > MaxRetryDelay || policy.Initial > policy.Maximum {
 		return 0, fmt.Errorf("%w: retry policy is invalid", ErrInvalid)
 	}
+	if policy.Initial == 0 {
+		return 0, nil
+	}
 	delay := policy.Initial
 	for current := 1; current < attempt && delay < policy.Maximum; current++ {
 		if delay > policy.Maximum/2 {

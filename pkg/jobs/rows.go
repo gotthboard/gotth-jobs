@@ -85,7 +85,7 @@ func validateStoredJob(job Job) error {
 	if len(job.Payload) > MaxPayloadBytes || len(job.IdempotencyKey) > MaxIdempotencyKeyBytes || len(job.LastError) > MaxFailureBytes || job.Attempts < 0 || job.Attempts > job.MaxAttempts || job.MaxAttempts < 1 || job.MaxAttempts > MaxAttempts {
 		return fmt.Errorf("stored job violates the schema contract")
 	}
-	if !utf8.ValidString(job.IdempotencyKey) || !utf8.ValidString(job.LastError) || strings.IndexByte(job.IdempotencyKey, 0) >= 0 || strings.IndexByte(job.LastError, 0) >= 0 {
+	if !utf8.ValidString(job.IdempotencyKey) || !utf8.ValidString(job.LeaseOwner) || !utf8.ValidString(job.LastError) || strings.IndexByte(job.IdempotencyKey, 0) >= 0 || strings.IndexByte(job.LeaseOwner, 0) >= 0 || strings.IndexByte(job.LastError, 0) >= 0 {
 		return fmt.Errorf("stored job has invalid text")
 	}
 	switch job.State {

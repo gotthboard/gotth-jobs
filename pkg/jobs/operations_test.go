@@ -91,6 +91,7 @@ func TestListDeadClosesRowsAndHonorsCursor(t *testing.T) {
 		{limit: 0},
 		{limit: MaxDeadPage + 1},
 		{cursor: &DeadCursor{}, limit: 1},
+		{cursor: &DeadCursor{FinishedAt: cursor.FinishedAt.Add(time.Nanosecond), ID: cursor.ID}, limit: 1},
 	} {
 		if _, err := repository.ListDead(context.Background(), "default", invalid.cursor, invalid.limit); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("ListDead(invalid) = %v", err)

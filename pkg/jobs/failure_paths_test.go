@@ -140,6 +140,9 @@ func TestLifecycleDatabaseFailurePaths(t *testing.T) {
 	if _, err := repository.Heartbeat(context.Background(), lease, MaxLeaseDuration+1); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("heartbeat long lease = %v", err)
 	}
+	if _, err := repository.Heartbeat(context.Background(), lease, time.Second+time.Nanosecond); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("heartbeat sub-microsecond lease = %v", err)
+	}
 	if _, err := repository.Fail(context.Background(), lease, Failure{Permanent: true, RetryAfter: time.Second}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("fail invalid = %v", err)
 	}

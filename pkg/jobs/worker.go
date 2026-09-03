@@ -67,7 +67,7 @@ func (worker Worker) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("claim worker job: %w", err)
 		}
-		if err := validateClaimedAttempt(job, worker.Queue); err != nil {
+		if err := validateClaimedAttempt(job, worker.Queue, worker.WorkerID); err != nil {
 			return err
 		}
 		if err := worker.runAttempt(ctx, job); err != nil {
@@ -79,14 +79,15 @@ func (worker Worker) Run(ctx context.Context) error {
 // validateClaimedAttempt rejects a Store implementation that returns a job
 // outside the requested queue or without a usable running lease.
 //
-// Complexity: for queue q plus ID/token bytes i+t, time O(q+i+t), Omega(q),
-// tight Theta(q+i+t); auxiliary space O(1), Omega(1), tight Theta(1).
-func validateClaimedAttempt(job Job, queue string) error {
-	if job.Queue != queue || job.State != StateRunning || job.Attempts < 1 || job.Attempts > job.MaxAttempts || job.MaxAttempts > MaxAttempts {
+// Complexity: for all variable job text bytes n, time O(n), Omega(1), tight
+// Theta(n) for a valid job; payload validation reads only its length;
+// auxiliary space O(1), Omega(1), tight Theta(1).
+func validateClaimedAttempt(job Job, queue, workerID string) error {
+	if job.Queue != queue || job.LeaseOwner != workerID {
 		return fmt.Errorf("%w: store returned an invalid claimed job", ErrInvalid)
 	}
-	if err := validateJobID(job.ID); err != nil || job.Lease.JobID != job.ID || len(job.Lease.Token) != 64 || !isLowerHex(job.Lease.Token) {
-		return fmt.Errorf("%w: store returned an invalid claimed lease", ErrInvalid)
+	if err := validateStoredJob(job); err != nil {
+		return fmt.Errorf("%w: store returned an invalid claimed job: %v", ErrInvalid, err)
 	}
 	return nil
 }
@@ -111,6 +112,9 @@ func (worker Worker) validate() error {
 	}
 	if _, err := worker.RetryPolicy.Delay(1); err != nil {
 		return err
+	}
+	if worker.RetryPolicy.Initial%time.Microsecond != 0 || worker.RetryPolicy.Maximum%time.Microsecond != 0 {
+		return fmt.Errorf("%w: retry policy must use PostgreSQL microsecond precision", ErrInvalid)
 	}
 	return nil
 }

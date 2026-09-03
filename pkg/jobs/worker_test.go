@@ -49,7 +49,8 @@ func claimedJob(attempt int) Job {
 	return Job{
 		ID: "0123456789abcdef0123456789abcdef", Queue: "default", Kind: "send",
 		State: StateRunning, Attempts: attempt, MaxAttempts: 3,
-		Lease: Lease{JobID: "0123456789abcdef0123456789abcdef", Token: strings.Repeat("ab", 32)},
+		Lease:      Lease{JobID: "0123456789abcdef0123456789abcdef", Token: strings.Repeat("ab", 32)},
+		LeaseOwner: "worker-1", LeaseUntil: time.Now().UTC().Add(time.Minute),
 	}
 }
 
@@ -300,15 +301,22 @@ func TestWorkerContextAndConfigurationEdges(t *testing.T) {
 	badRetry.RetryPolicy = RetryPolicy{Initial: time.Second, Maximum: 0}
 	badQueue := worker
 	badQueue.Queue = "bad queue"
-	for _, candidate := range []Worker{badPoll, badRetry, badQueue} {
+	badRetryPrecision := worker
+	badRetryPrecision.RetryPolicy = RetryPolicy{Initial: time.Nanosecond, Maximum: time.Microsecond}
+	for _, candidate := range []Worker{badPoll, badRetry, badQueue, badRetryPrecision} {
 		if err := candidate.validate(); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("invalid worker accepted: %+v, %v", candidate, err)
 		}
 	}
 	invalidLease := job
 	invalidLease.Lease.Token = "bad"
-	if err := validateClaimedAttempt(invalidLease, "default"); !errors.Is(err, ErrInvalid) {
+	if err := validateClaimedAttempt(invalidLease, "default", "worker-1"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("validateClaimedAttempt(bad lease) = %v", err)
+	}
+	wrongOwner := job
+	wrongOwner.LeaseOwner = "worker-2"
+	if err := validateClaimedAttempt(wrongOwner, "default", "worker-1"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("validateClaimedAttempt(wrong owner) = %v", err)
 	}
 }
 

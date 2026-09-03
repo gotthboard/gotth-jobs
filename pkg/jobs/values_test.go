@@ -37,6 +37,7 @@ func TestEnqueueRequestValidationAndCopy(t *testing.T) {
 		{name: "oversize payload", edit: func(r *EnqueueRequest) { r.Payload = make([]byte, MaxPayloadBytes+1) }},
 		{name: "oversize key", edit: func(r *EnqueueRequest) { r.IdempotencyKey = strings.Repeat("i", MaxIdempotencyKeyBytes+1) }},
 		{name: "nul key", edit: func(r *EnqueueRequest) { r.IdempotencyKey = "bad\x00key" }},
+		{name: "sub-microsecond availability", edit: func(r *EnqueueRequest) { r.AvailableAt = now.Add(time.Nanosecond) }},
 		{name: "zero attempts", edit: func(r *EnqueueRequest) { r.MaxAttempts = 0 }},
 		{name: "too many attempts", edit: func(r *EnqueueRequest) { r.MaxAttempts = MaxAttempts + 1 }},
 		{name: "non utc availability", edit: func(r *EnqueueRequest) { r.AvailableAt = now.In(time.FixedZone("other", 3600)) }},
@@ -72,6 +73,7 @@ func TestClaimAndFailureValidationBoundaries(t *testing.T) {
 		{Queue: "default", Worker: "worker", LeaseDuration: time.Second - 1},
 		{Queue: "default", Worker: "worker", LeaseDuration: time.Hour + 1},
 		{Queue: "default", Worker: strings.Repeat("w", MaxWorkerBytes+1), LeaseDuration: time.Second},
+		{Queue: "default", Worker: "worker", LeaseDuration: time.Second + time.Nanosecond},
 	}
 	for _, request := range invalidClaims {
 		if err := validateClaim(request); !errors.Is(err, ErrInvalid) {
@@ -92,6 +94,7 @@ func TestClaimAndFailureValidationBoundaries(t *testing.T) {
 		{Message: "bad\x00error"},
 		{RetryAfter: -1},
 		{RetryAfter: MaxRetryDelay + 1},
+		{RetryAfter: time.Nanosecond},
 		{Permanent: true, RetryAfter: time.Second},
 	} {
 		if err := validateFailure(failure); !errors.Is(err, ErrInvalid) {
@@ -146,7 +149,7 @@ func TestPermanentPreservesErrorTraversal(t *testing.T) {
 }
 
 func TestRequestFingerprintBindsEverySemanticField(t *testing.T) {
-	base := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), IdempotencyKey: "same", MaxAttempts: 3, AvailableAt: time.Unix(1_900_000_000, 123).UTC()}
+	base := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), IdempotencyKey: "same", MaxAttempts: 3, AvailableAt: time.Unix(1_900_000_000, 123_000).UTC()}
 	want := requestFingerprint(base)
 	if got := requestFingerprint(base); got != want {
 		t.Fatal("request fingerprint is nondeterministic")
@@ -157,7 +160,7 @@ func TestRequestFingerprintBindsEverySemanticField(t *testing.T) {
 		func(r *EnqueueRequest) { r.Kind = "other" },
 		func(r *EnqueueRequest) { r.Payload = []byte("other") },
 		func(r *EnqueueRequest) { r.MaxAttempts++ },
-		func(r *EnqueueRequest) { r.AvailableAt = r.AvailableAt.Add(time.Nanosecond) },
+		func(r *EnqueueRequest) { r.AvailableAt = r.AvailableAt.Add(time.Microsecond) },
 	}
 	for index, mutate := range mutations {
 		request := cloneEnqueue(base)
@@ -170,6 +173,18 @@ func TestRequestFingerprintBindsEverySemanticField(t *testing.T) {
 	request.IdempotencyKey = "different"
 	if requestFingerprint(request) != want {
 		t.Fatal("idempotency key must not be part of request semantics")
+	}
+}
+
+func TestRequestFingerprintDoesNotUseOverflowingUnixNanoseconds(t *testing.T) {
+	first := EnqueueRequest{Queue: "default", Kind: "send", MaxAttempts: 1, AvailableAt: time.Unix(0, 0).UTC()}
+	second := first
+	second.AvailableAt = time.Unix(18_446_744_073, 709_551_616).UTC()
+	if first.AvailableAt.UnixNano() != second.AvailableAt.UnixNano() {
+		t.Fatal("test fixture no longer demonstrates UnixNano wraparound")
+	}
+	if requestFingerprint(first) == requestFingerprint(second) {
+		t.Fatal("distinct schedule times have the same request fingerprint")
 	}
 }
 

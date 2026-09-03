@@ -6,7 +6,9 @@
 attempt, lease, failure, and timestamp columns. A partial unique index on
 `(queue, idempotency_key)` applies only when a key exists. A SHA-256 request
 fingerprint covers queue, kind, payload, maximum attempts, and requested
-availability so key reuse with different semantics fails closed.
+availability so key reuse with different semantics fails closed. Availability
+uses signed Unix seconds plus nanoseconds rather than the range-limited
+`time.Time.UnixNano` representation.
 
 ## Public operations
 

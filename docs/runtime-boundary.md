@@ -7,6 +7,8 @@
 - The database encoding is UTF8. Library-owned transactions explicitly request
   Read Committed and read-write mode rather than inheriting session defaults.
 - Go 1.26.6 and `github.com/jackc/pgx/v5` 5.10.0.
+- Timestamps and database-bound durations use PostgreSQL's microsecond
+  precision. Finer values are rejected instead of being silently truncated.
 
 ## Authoritative contracts read before design
 

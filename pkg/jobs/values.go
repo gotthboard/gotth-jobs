@@ -30,8 +30,11 @@ func requestFingerprint(request EnqueueRequest) [sha256.Size]byte {
 		_, _ = hash.Write([]byte{0})
 	} else {
 		_, _ = hash.Write([]byte{1})
-		binary.BigEndian.PutUint64(scalar[:], uint64(request.AvailableAt.UnixNano()))
+		binary.BigEndian.PutUint64(scalar[:], uint64(request.AvailableAt.Unix()))
 		_, _ = hash.Write(scalar[:])
+		var nanoseconds [4]byte
+		binary.BigEndian.PutUint32(nanoseconds[:], uint32(request.AvailableAt.Nanosecond()))
+		_, _ = hash.Write(nanoseconds[:])
 	}
 	var result [sha256.Size]byte
 	copy(result[:], hash.Sum(nil))
@@ -72,8 +75,8 @@ func validateEnqueue(request EnqueueRequest) error {
 	if request.MaxAttempts < 1 || request.MaxAttempts > MaxAttempts {
 		return fmt.Errorf("%w: max attempts must be between 1 and %d", ErrInvalid, MaxAttempts)
 	}
-	if !request.AvailableAt.IsZero() && request.AvailableAt.Location() != time.UTC {
-		return fmt.Errorf("%w: availability must use UTC", ErrInvalid)
+	if !request.AvailableAt.IsZero() && (request.AvailableAt.Location() != time.UTC || request.AvailableAt.Nanosecond()%int(time.Microsecond) != 0) {
+		return fmt.Errorf("%w: availability must use UTC and PostgreSQL microsecond precision", ErrInvalid)
 	}
 	return nil
 }
@@ -103,6 +106,9 @@ func validateClaim(request ClaimRequest) error {
 	if request.LeaseDuration < MinLeaseDuration || request.LeaseDuration > MaxLeaseDuration {
 		return fmt.Errorf("%w: lease must be between %s and %s", ErrInvalid, MinLeaseDuration, MaxLeaseDuration)
 	}
+	if request.LeaseDuration%time.Microsecond != 0 {
+		return fmt.Errorf("%w: lease must use PostgreSQL microsecond precision", ErrInvalid)
+	}
 	return nil
 }
 
@@ -116,6 +122,9 @@ func validateFailure(failure Failure) error {
 	}
 	if failure.RetryAfter < 0 || failure.RetryAfter > MaxRetryDelay {
 		return fmt.Errorf("%w: retry delay must be between zero and %s", ErrInvalid, MaxRetryDelay)
+	}
+	if failure.RetryAfter%time.Microsecond != 0 {
+		return fmt.Errorf("%w: retry delay must use PostgreSQL microsecond precision", ErrInvalid)
 	}
 	if failure.Permanent && failure.RetryAfter != 0 {
 		return fmt.Errorf("%w: permanent failure cannot carry a retry delay", ErrInvalid)

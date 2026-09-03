@@ -154,6 +154,9 @@ func (repository *PostgreSQL) Heartbeat(ctx context.Context, lease Lease, durati
 	if duration < MinLeaseDuration || duration > MaxLeaseDuration {
 		return Job{}, fmt.Errorf("%w: lease must be between %s and %s", ErrInvalid, MinLeaseDuration, MaxLeaseDuration)
 	}
+	if duration%time.Microsecond != 0 {
+		return Job{}, fmt.Errorf("%w: lease must use PostgreSQL microsecond precision", ErrInvalid)
+	}
 	return repository.leaseMutation(ctx, lease, heartbeatSQL, duration.Microseconds())
 }
 

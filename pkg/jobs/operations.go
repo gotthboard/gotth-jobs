@@ -103,7 +103,7 @@ func (repository *PostgreSQL) ListDead(ctx context.Context, queue string, cursor
 	var cursorTime any
 	var cursorID string
 	if cursor != nil {
-		if cursor.FinishedAt.IsZero() || cursor.FinishedAt.Location() != time.UTC {
+		if cursor.FinishedAt.IsZero() || cursor.FinishedAt.Location() != time.UTC || cursor.FinishedAt.Nanosecond()%int(time.Microsecond) != 0 {
 			return nil, fmt.Errorf("%w: dead-letter cursor time is invalid", ErrInvalid)
 		}
 		if err := validateJobID(cursor.ID); err != nil {

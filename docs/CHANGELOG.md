@@ -6,9 +6,49 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
-### 2026-09-03 08:57 CDT — Define the durable job library contract
+### 2026-09-03 09:25 CDT — Implement the durable PostgreSQL job engine
 
 Commit: current commit; hash assigned by Git after commit
+
+Affected files:
+
+- `go.mod`
+- `go.sum`
+- `pkg/jobs/**`
+- `docs/runtime-boundary.md`
+- `docs/performance.md`
+- `docs/verification.md`
+- `workflow/COVERAGE.md`
+
+Explanation:
+
+Implement the first complete reusable library boundary: immutable PostgreSQL
+schema, atomic and idempotent enqueue, bounded nonblocking claim, database-clock
+leases, random fencing tokens, heartbeats, completion and failure transitions,
+cooperative cancellation, bounded retries, dead-letter pagination and redrive,
+queue counts, and a serial worker with panic containment. Real PostgreSQL tests
+caught and closed nil-payload encoding, ambiguous SQL, and rolled-back
+lease-reaping defects that fake rows could not reveal.
+
+Verification:
+
+- `go test ./pkg/jobs`
+- `go vet ./pkg/jobs`
+- `go test -race ./pkg/jobs`
+- PostgreSQL 17.10 integration and concurrency suite
+- two five-second fuzz admissions totaling 147,908 executions
+- 96.4% statement coverage with explicit residual gaps
+- PostgreSQL performance workload matrix
+
+Risks / non-goals:
+
+- Delivery is at least once; external side effects remain consumer-idempotent.
+- No tag, consumer pin, remote push, live database, or deployment changes.
+- Final clean-clone, graph, and cold-review admission remain pending.
+
+### 2026-09-03 08:57 CDT — Define the durable job library contract
+
+Commit: `a1835f320f66107545f58a6462a17ee9d97cf95f`
 
 Affected files:
 

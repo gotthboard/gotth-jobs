@@ -1,0 +1,232 @@
+package jobs
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+)
+
+type stubRow struct {
+	values []any
+	err    error
+}
+
+func (row stubRow) Scan(destinations ...any) error {
+	if row.err != nil {
+		return row.err
+	}
+	if len(destinations) != len(row.values) {
+		return errors.New("unexpected scan width")
+	}
+	for index, destination := range destinations {
+		value := row.values[index]
+		switch target := destination.(type) {
+		case *string:
+			*target = value.(string)
+		case *[]byte:
+			*target = append((*target)[:0], value.([]byte)...)
+		case *int:
+			*target = value.(int)
+		case *int64:
+			*target = value.(int64)
+		case *time.Time:
+			*target = value.(time.Time)
+		case **string:
+			if value == nil {
+				*target = nil
+			} else {
+				copy := value.(string)
+				*target = &copy
+			}
+		case **time.Time:
+			if value == nil {
+				*target = nil
+			} else {
+				copy := value.(time.Time)
+				*target = &copy
+			}
+		default:
+			return errors.New("unsupported scan destination")
+		}
+	}
+	return nil
+}
+
+type stubTx struct {
+	pgx.Tx
+	rows        []pgx.Row
+	statements  []string
+	arguments   [][]any
+	commitErr   error
+	rollbackErr error
+	commits     int
+	rollbacks   int
+}
+
+func (tx *stubTx) QueryRow(_ context.Context, statement string, arguments ...any) pgx.Row {
+	tx.statements = append(tx.statements, statement)
+	tx.arguments = append(tx.arguments, append([]any(nil), arguments...))
+	if len(tx.rows) == 0 {
+		return stubRow{err: errors.New("unexpected query")}
+	}
+	row := tx.rows[0]
+	tx.rows = tx.rows[1:]
+	return row
+}
+
+func (tx *stubTx) Commit(context.Context) error {
+	tx.commits++
+	return tx.commitErr
+}
+
+func (tx *stubTx) Rollback(context.Context) error {
+	tx.rollbacks++
+	return tx.rollbackErr
+}
+
+type stubDatabase struct {
+	tx             *stubTx
+	beginErr       error
+	rows           pgx.Rows
+	queryErr       error
+	directRows     []pgx.Row
+	statements     []string
+	queryArguments [][]any
+	beginOptions   []pgx.TxOptions
+}
+
+func (database *stubDatabase) BeginTx(_ context.Context, options pgx.TxOptions) (pgx.Tx, error) {
+	database.beginOptions = append(database.beginOptions, options)
+	return database.tx, database.beginErr
+}
+
+func (database *stubDatabase) Query(_ context.Context, statement string, arguments ...any) (pgx.Rows, error) {
+	database.statements = append(database.statements, statement)
+	database.queryArguments = append(database.queryArguments, append([]any(nil), arguments...))
+	return database.rows, database.queryErr
+}
+
+func (database *stubDatabase) QueryRow(_ context.Context, statement string, arguments ...any) pgx.Row {
+	database.statements = append(database.statements, statement)
+	database.queryArguments = append(database.queryArguments, append([]any(nil), arguments...))
+	if len(database.directRows) == 0 {
+		return stubRow{err: errors.New("unexpected query row")}
+	}
+	row := database.directRows[0]
+	database.directRows = database.directRows[1:]
+	return row
+}
+
+func jobRow(id string, request EnqueueRequest, state State) stubRow {
+	now := time.Unix(1_900_000_000, 0).UTC()
+	var key any
+	if request.IdempotencyKey != "" {
+		key = request.IdempotencyKey
+	}
+	return stubRow{values: []any{
+		id, request.Queue, request.Kind, request.Payload, key, string(state), 0,
+		request.MaxAttempts, request.AvailableAt, now, now, nil, nil, nil, "", nil,
+	}}
+}
+
+func TestEnqueueCommitsCreatedJobAndCopiesPayload(t *testing.T) {
+	request := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), MaxAttempts: 3, AvailableAt: time.Unix(1_900_000_000, 0).UTC()}
+	tx := &stubTx{rows: []pgx.Row{jobRow("0123456789abcdef0123456789abcdef", request, StatePending)}}
+	database := &stubDatabase{tx: tx}
+	repository, err := NewPostgreSQL(database)
+	if err != nil {
+		t.Fatalf("NewPostgreSQL() = %v", err)
+	}
+
+	job, created, err := repository.Enqueue(context.Background(), request)
+	if err != nil || !created || job.ID == "" || tx.commits != 1 {
+		t.Fatalf("Enqueue() = (%+v, %t, %v), commits=%d", job, created, err, tx.commits)
+	}
+	request.Payload[0] = 'X'
+	if string(job.Payload) != "payload" || reflect.DeepEqual(job.Payload, request.Payload) {
+		t.Fatalf("returned payload aliases caller: %q", job.Payload)
+	}
+	if len(tx.arguments) != 1 || tx.arguments[0][0] == "" {
+		t.Fatalf("insert arguments missing generated ID: %+v", tx.arguments)
+	}
+	if len(database.beginOptions) != 1 || database.beginOptions[0].IsoLevel != pgx.ReadCommitted || database.beginOptions[0].AccessMode != pgx.ReadWrite {
+		t.Fatalf("transaction options = %+v", database.beginOptions)
+	}
+}
+
+func TestEnqueueIdempotentDuplicateAndConflict(t *testing.T) {
+	request := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), IdempotencyKey: "key", MaxAttempts: 3, AvailableAt: time.Unix(1_900_000_000, 0).UTC()}
+	fingerprint := requestFingerprint(request)
+	for _, test := range []struct {
+		name        string
+		fingerprint []byte
+		wantErr     error
+	}{
+		{name: "same", fingerprint: fingerprint[:]},
+		{name: "different", fingerprint: make([]byte, len(fingerprint)), wantErr: ErrIdempotencyConflict},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tx := &stubTx{rows: []pgx.Row{
+				stubRow{err: pgx.ErrNoRows},
+				stubRow{values: []any{test.fingerprint}},
+				jobRow("0123456789abcdef0123456789abcdef", request, StatePending),
+			}}
+			repository, err := NewPostgreSQL(&stubDatabase{tx: tx})
+			if err != nil {
+				t.Fatal(err)
+			}
+			job, created, err := repository.Enqueue(context.Background(), request)
+			if !errors.Is(err, test.wantErr) {
+				t.Fatalf("Enqueue() error = %v, want %v", err, test.wantErr)
+			}
+			if test.wantErr == nil && (created || job.ID == "" || tx.commits != 1) {
+				t.Fatalf("idempotent result = (%+v, %t), commits=%d", job, created, tx.commits)
+			}
+			if test.wantErr != nil && tx.commits != 0 {
+				t.Fatalf("conflict committed %d times", tx.commits)
+			}
+		})
+	}
+}
+
+func TestEnqueueClassifiesCommitFailureAndEnqueueTxDoesNotCommit(t *testing.T) {
+	request := EnqueueRequest{Queue: "default", Kind: "send", MaxAttempts: 1}
+	commitFailure := errors.New("connection lost")
+	tx := &stubTx{rows: []pgx.Row{jobRow("0123456789abcdef0123456789abcdef", request, StatePending)}, commitErr: commitFailure}
+	repository, err := NewPostgreSQL(&stubDatabase{tx: tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repository.Enqueue(context.Background(), request); !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, commitFailure) {
+		t.Fatalf("Enqueue(commit failure) = %v", err)
+	}
+
+	tx = &stubTx{rows: []pgx.Row{jobRow("fedcba9876543210fedcba9876543210", request, StatePending)}}
+	if job, created, err := repository.EnqueueTx(context.Background(), tx, request); err != nil || !created || job.ID == "" || tx.commits != 0 {
+		t.Fatalf("EnqueueTx() = (%+v, %t, %v), commits=%d", job, created, err, tx.commits)
+	}
+}
+
+func TestPostgreSQLAndEnqueueRejectInvalidInputs(t *testing.T) {
+	if _, err := NewPostgreSQL(nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("NewPostgreSQL(nil) = %v", err)
+	}
+	repository, err := NewPostgreSQL(&stubDatabase{tx: &stubTx{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repository.Enqueue(nil, EnqueueRequest{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Enqueue(nil) = %v", err)
+	}
+	if _, _, err := repository.EnqueueTx(context.Background(), nil, EnqueueRequest{}); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("EnqueueTx(nil) = %v", err)
+	}
+}
+
+var _ Database = (*stubDatabase)(nil)
+var _ pgx.Tx = (*stubTx)(nil)
+var _ pgx.Row = stubRow{}

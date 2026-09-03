@@ -1,1 +1,2 @@
 {"at":"2026-09-03T13:57:36Z","feature":"reusable-v0-admission","from":"planned","to":"active","reason":"Danny directed implementation of gotth-jobs"}
+{"at":"2026-09-03T14:52:58Z","event":"feature_completed","feature":"reusable-v0-admission","source_commit":"d800418f2013b8e8e24c61d9baed38e10dffe26e","branch":"feature/reusable-v0-admission"}

@@ -16,6 +16,6 @@
 | JOB-012 | trust boundary | API shape and docs | external-package compile and rollback | covered |
 | JOB-013 | distribution | `LICENSE` and policy docs | license inventory | covered |
 
-Statement coverage is 96.4%. The exact residual branches are recorded in
-`docs/verification.md`; coverage is iteration evidence, not the admission
-oracle.
+Statement coverage is 96.5% under the canonical local compiler. The exact
+residual branches are recorded in `docs/verification.md`; coverage is iteration
+evidence, not the admission oracle.

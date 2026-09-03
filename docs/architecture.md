@@ -11,9 +11,9 @@ them.
 
 ```text
 pending --claim--> running --complete--> succeeded
-   |                 |  |                  
+   |                 |  |
  cancel              |  +--fail/exhaust--> dead --redrive--> pending
-   v                 |  
+   v                 |
 canceled <-----------+ cancel
                      +--retry------------> pending
 ```

@@ -6,9 +6,74 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-03 09:52 CDT — Preserve temporal and worker boundaries
+
+Commit: `d800418f2013b8e8e24c61d9baed38e10dffe26e`
+
+Affected files:
+
+- `pkg/jobs/values.go`
+- `pkg/jobs/rows.go`
+- `pkg/jobs/lifecycle.go`
+- `pkg/jobs/operations.go`
+- `pkg/jobs/worker.go`
+- corresponding unit tests
+- `docs/implementation-spec.md`
+- `docs/runtime-boundary.md`
+
+Explanation:
+
+Replace range-limited `UnixNano` request fingerprinting with signed seconds
+plus nanoseconds, reject database-bound times and durations finer than
+PostgreSQL's microsecond precision, and reject malformed or wrongly owned jobs
+returned by a custom worker store.
+
+Verification:
+
+- format, vet, unit, race, and fifty repeated race runs
+- PostgreSQL 17.10 race integration and concurrency suite
+- two fuzz admissions totaling 157,372 executions
+- 96.5% local statement coverage
+- final performance, clean-clone, external-consumer, and Graphify gates
+
+Risks / non-goals:
+
+- Sub-microsecond database-bound values fail with `ErrInvalid`; they are not
+  silently rounded.
+- No tag, consumer pin, remote push, live database, or deployment changes.
+
+### 2026-09-03 09:42 CDT — Close admission defects
+
+Commit: `4e76bc508b54e66ea16a7418a052f3d3dd14b049`
+
+Affected files:
+
+- `pkg/jobs/retry.go`
+- `pkg/jobs/rows.go`
+- `pkg/jobs/values.go`
+- `pkg/jobs/values_test.go`
+
+Explanation:
+
+Make zero-initial-delay retry calculation constant-time even for a hostile
+attempt number, and correct two complexity contracts that falsely counted
+payload-byte scans performed elsewhere.
+
+Verification:
+
+- format, vet, unit, race, and fifty repeated race runs
+- PostgreSQL 17.10 race integration
+- two fuzz admissions totaling 135,283 executions
+- performance matrix and clean-clone external-consumer compilation
+
+Risks / non-goals:
+
+- Delivery remains at least once.
+- No tag, consumer pin, remote push, live database, or deployment changes.
+
 ### 2026-09-03 09:25 CDT — Implement the durable PostgreSQL job engine
 
-Commit: current commit; hash assigned by Git after commit
+Commit: `64a053d51583854f13d8000c42345a645c993bf4`
 
 Affected files:
 
@@ -44,7 +109,6 @@ Risks / non-goals:
 
 - Delivery is at least once; external side effects remain consumer-idempotent.
 - No tag, consumer pin, remote push, live database, or deployment changes.
-- Final clean-clone, graph, and cold-review admission remain pending.
 
 ### 2026-09-03 08:57 CDT — Define the durable job library contract
 

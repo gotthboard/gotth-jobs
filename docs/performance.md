@@ -33,16 +33,18 @@ outside the measurement.
 
 | Workload | Samples | p50 | p95 | p99 | Loop throughput |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| empty queue | 100 | 554.037 us | 937.473 us | 1.120165 ms | 1667.38 ops/s |
-| 100-job small backlog, empty payload | 50 | 3.642659 ms | 4.017174 ms | 5.475084 ms | 142.42 ops/s |
-| 500-job typical backlog, 1 KiB payload | 200 | 4.254707 ms | 7.664852 ms | 7.838505 ms | 119.50 ops/s |
-| 20-job, 1 MiB payload boundary | 20 | 6.120212 ms | 8.223411 ms | 8.876519 ms | 75.58 ops/s |
-| 100-row locked prefix | 1 | 21.387997 ms | N/A | N/A | N/A |
+| empty queue | 100 | 547.420 us | 928.435 us | 1.042998 ms | 1706.82 ops/s |
+| 100-job small backlog, empty payload | 50 | 3.736292 ms | 3.823083 ms | 5.576642 ms | 137.70 ops/s |
+| 500-job typical backlog, 1 KiB payload | 200 | 4.308471 ms | 6.739052 ms | 6.836404 ms | 122.90 ops/s |
+| 20-job, 1 MiB payload boundary | 20 | 6.833573 ms | 9.873654 ms | 9.981406 ms | 68.05 ops/s |
+| 100-row locked prefix | 1 | 12.263463 ms | N/A | N/A | N/A |
 
 The pathological sample proves that `SKIP LOCKED` can walk past a locked
-prefix; it is not a distribution and supports no percentile claim. CPU, I/O,
-allocation, and execution-plan attribution were not separately profiled
-because no optimization is proposed. The returned payload copy and database
-round trips are the expected visible costs. Re-profile when a real consumer
-supplies representative payloads, concurrency, retention, and service-level
-objectives.
+prefix; it is not a distribution and supports no percentile claim. These
+latencies come from the final uninstrumented performance run; the separate
+race-instrumented integration run is a correctness gate, not a timing source.
+CPU, I/O, allocation, and execution-plan attribution were not separately
+profiled because no optimization is proposed. The returned payload copy and
+database round trips are the expected visible costs. Re-profile when a real
+consumer supplies representative payloads, concurrency, retention, and
+service-level objectives.

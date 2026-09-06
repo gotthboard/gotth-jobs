@@ -70,8 +70,8 @@ func scanJob(row pgx.Row) (Job, error) {
 //
 // Complexity: for q queue, k kind, i key, w owner, e error, and token bytes,
 // time O(q+k+i+w+e+token), Omega(q+k), tight Theta(q+k+i+w+e+token) because
-// payload validation reads only its length; auxiliary space O(1), Omega(1),
-// tight Theta(1).
+// payload validation reads only its length and state/attempt checks are
+// constant-time; auxiliary space O(1), Omega(1), tight Theta(1).
 func validateStoredJob(job Job) error {
 	if len(job.ID) != 32 || !isLowerHex(job.ID) {
 		return fmt.Errorf("stored job ID violates the schema contract")
@@ -87,6 +87,10 @@ func validateStoredJob(job Job) error {
 	}
 	if !utf8.ValidString(job.IdempotencyKey) || !utf8.ValidString(job.LeaseOwner) || !utf8.ValidString(job.LastError) || strings.IndexByte(job.IdempotencyKey, 0) >= 0 || strings.IndexByte(job.LeaseOwner, 0) >= 0 || strings.IndexByte(job.LastError, 0) >= 0 {
 		return fmt.Errorf("stored job has invalid text")
+	}
+	if (job.State == StatePending && job.Attempts >= job.MaxAttempts) ||
+		((job.State == StateRunning || job.State == StateSucceeded || job.State == StateDead) && job.Attempts == 0) {
+		return fmt.Errorf("stored job has invalid state and attempt combination")
 	}
 	switch job.State {
 	case StatePending, StateSucceeded, StateDead, StateCanceled:

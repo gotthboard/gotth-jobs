@@ -188,6 +188,40 @@ func TestRequestFingerprintDoesNotUseOverflowingUnixNanoseconds(t *testing.T) {
 	}
 }
 
+func TestEnqueueAvailabilityPostgreSQLRange(t *testing.T) {
+	minimum := time.Date(-4713, time.November, 24, 0, 0, 0, 0, time.UTC)
+	maximum := time.Date(294276, time.December, 31, 23, 59, 59, 999999000, time.UTC)
+	overflowToY2K := time.Unix(18_447_690_758_509, 551_616_000).UTC()
+	tests := []struct {
+		name      string
+		available time.Time
+		valid     bool
+	}{
+		{name: "minimum", available: minimum, valid: true},
+		{name: "minimum plus one microsecond", available: minimum.Add(time.Microsecond), valid: true},
+		{name: "maximum minus one microsecond", available: maximum.Add(-time.Microsecond), valid: true},
+		{name: "maximum", available: maximum, valid: true},
+		{name: "below minimum", available: minimum.Add(-time.Microsecond)},
+		{name: "above maximum", available: maximum.Add(time.Microsecond)},
+		{name: "pgx codec wraps to Y2K", available: overflowToY2K},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := EnqueueRequest{
+				Queue: "default", Kind: "send", MaxAttempts: 1,
+				AvailableAt: test.available,
+			}
+			err := validateEnqueue(request)
+			if test.valid && err != nil {
+				t.Fatalf("validateEnqueue(%v) = %v", test.available, err)
+			}
+			if !test.valid && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("validateEnqueue(%v) = %v, want ErrInvalid", test.available, err)
+			}
+		})
+	}
+}
+
 func TestEveryDocumentedEnvelopeBoundary(t *testing.T) {
 	for _, size := range []int{MaxQueueBytes - 1, MaxQueueBytes} {
 		request := EnqueueRequest{Queue: strings.Repeat("q", size), Kind: "kind", MaxAttempts: 1}

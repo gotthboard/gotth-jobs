@@ -12,6 +12,11 @@ import (
 	"unicode/utf8"
 )
 
+var (
+	minimumPostgreSQLTimestamp = time.Date(-4713, time.November, 24, 0, 0, 0, 0, time.UTC)
+	maximumPostgreSQLTimestamp = time.Date(294276, time.December, 31, 23, 59, 59, 999999000, time.UTC)
+)
+
 // requestFingerprint binds every semantic request field other than the
 // idempotency key using unambiguous length-prefix framing.
 //
@@ -58,7 +63,8 @@ func writeFingerprintField(hash io.Writer, field []byte) {
 //
 // Complexity: for q queue bytes, k kind bytes, and i key bytes, time
 // O(q+k+i), Omega(q+k), tight Theta(q+k+i) because payload validation reads
-// only its length; auxiliary space O(1), Omega(1), tight Theta(1).
+// only its length and timestamp range checks are constant-time; auxiliary
+// space O(1), Omega(1), tight Theta(1).
 func validateEnqueue(request EnqueueRequest) error {
 	if err := validateName("queue", request.Queue, MaxQueueBytes); err != nil {
 		return err
@@ -75,8 +81,11 @@ func validateEnqueue(request EnqueueRequest) error {
 	if request.MaxAttempts < 1 || request.MaxAttempts > MaxAttempts {
 		return fmt.Errorf("%w: max attempts must be between 1 and %d", ErrInvalid, MaxAttempts)
 	}
-	if !request.AvailableAt.IsZero() && (request.AvailableAt.Location() != time.UTC || request.AvailableAt.Nanosecond()%int(time.Microsecond) != 0) {
-		return fmt.Errorf("%w: availability must use UTC and PostgreSQL microsecond precision", ErrInvalid)
+	if !request.AvailableAt.IsZero() && (request.AvailableAt.Location() != time.UTC ||
+		request.AvailableAt.Nanosecond()%int(time.Microsecond) != 0 ||
+		request.AvailableAt.Before(minimumPostgreSQLTimestamp) ||
+		request.AvailableAt.After(maximumPostgreSQLTimestamp)) {
+		return fmt.Errorf("%w: availability must use UTC, PostgreSQL microsecond precision, and the finite timestamp range", ErrInvalid)
 	}
 	return nil
 }

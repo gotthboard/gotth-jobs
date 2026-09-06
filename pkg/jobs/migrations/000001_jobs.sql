@@ -25,6 +25,13 @@ CREATE TABLE public.gotth_jobs (
     CONSTRAINT gotth_jobs_state CHECK (state IN ('pending', 'running', 'succeeded', 'dead', 'canceled')),
     CONSTRAINT gotth_jobs_attempts CHECK (attempts BETWEEN 0 AND 100),
     CONSTRAINT gotth_jobs_max_attempts CHECK (max_attempts BETWEEN 1 AND 100 AND attempts <= max_attempts),
+    CONSTRAINT gotth_jobs_state_attempt_shape CHECK (
+        (state = 'pending' AND attempts < max_attempts)
+        OR
+        (state IN ('running', 'succeeded', 'dead') AND attempts >= 1)
+        OR
+        state = 'canceled'
+    ),
     CONSTRAINT gotth_jobs_lease_shape CHECK (
         (state = 'running' AND lease_token IS NOT NULL AND lease_owner IS NOT NULL AND lease_until IS NOT NULL)
         OR

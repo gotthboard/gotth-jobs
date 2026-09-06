@@ -51,9 +51,61 @@ func TestStoredJobValidationRejectsEveryImpossibleShape(t *testing.T) {
 	}
 	terminal := valid
 	terminal.State = StateDead
+	terminal.Attempts = 1
 	terminal.FinishedAt = now
 	if err := validateStoredJob(terminal); err != nil {
 		t.Fatalf("valid terminal job rejected: %v", err)
+	}
+}
+
+func TestStoredJobValidationStateAttemptBoundaries(t *testing.T) {
+	now := time.Unix(1_900_000_000, 0).UTC()
+	tests := []struct {
+		name     string
+		state    State
+		attempts int
+		valid    bool
+	}{
+		{name: "pending zero", state: StatePending, attempts: 0, valid: true},
+		{name: "pending one", state: StatePending, attempts: 1, valid: true},
+		{name: "pending below maximum", state: StatePending, attempts: 2, valid: true},
+		{name: "pending at maximum", state: StatePending, attempts: 3},
+		{name: "running zero", state: StateRunning, attempts: 0},
+		{name: "running one", state: StateRunning, attempts: 1, valid: true},
+		{name: "running at maximum", state: StateRunning, attempts: 3, valid: true},
+		{name: "succeeded zero", state: StateSucceeded, attempts: 0},
+		{name: "succeeded one", state: StateSucceeded, attempts: 1, valid: true},
+		{name: "succeeded at maximum", state: StateSucceeded, attempts: 3, valid: true},
+		{name: "dead zero", state: StateDead, attempts: 0},
+		{name: "dead one", state: StateDead, attempts: 1, valid: true},
+		{name: "dead at maximum", state: StateDead, attempts: 3, valid: true},
+		{name: "canceled zero", state: StateCanceled, attempts: 0, valid: true},
+		{name: "canceled one", state: StateCanceled, attempts: 1, valid: true},
+		{name: "canceled at maximum", state: StateCanceled, attempts: 3, valid: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := Job{
+				ID: "0123456789abcdef0123456789abcdef", Queue: "default", Kind: "send",
+				State: test.state, Attempts: test.attempts, MaxAttempts: 3,
+				AvailableAt: now, CreatedAt: now, UpdatedAt: now,
+			}
+			switch test.state {
+			case StateRunning:
+				job.Lease = Lease{JobID: job.ID, Token: strings.Repeat("ab", 32)}
+				job.LeaseOwner = "worker"
+				job.LeaseUntil = now.Add(time.Minute)
+			case StateSucceeded, StateDead, StateCanceled:
+				job.FinishedAt = now
+			}
+			err := validateStoredJob(job)
+			if test.valid && err != nil {
+				t.Fatalf("validateStoredJob(%s, %d) = %v", test.state, test.attempts, err)
+			}
+			if !test.valid && err == nil {
+				t.Fatalf("validateStoredJob(%s, %d) accepted an impossible row", test.state, test.attempts)
+			}
+		})
 	}
 }
 

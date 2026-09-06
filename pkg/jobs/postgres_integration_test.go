@@ -5,6 +5,7 @@ package jobs_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"strconv"
@@ -103,6 +104,87 @@ func TestPostgreSQLEnqueueIdempotencyAndConsumerRollback(t *testing.T) {
 	}
 	if markerCount != 0 || jobCount != 0 {
 		t.Fatalf("rollback left marker=%d job=%d", markerCount, jobCount)
+	}
+}
+
+func TestPostgreSQLEnqueueAvailabilityBoundaries(t *testing.T) {
+	_, repository := integrationRepository(t)
+	ctx := context.Background()
+	minimum := time.Date(-4713, time.November, 24, 0, 0, 0, 0, time.UTC)
+	maximum := time.Date(294276, time.December, 31, 23, 59, 59, 999999000, time.UTC)
+	for index, available := range []time.Time{minimum, minimum.Add(time.Microsecond), maximum.Add(-time.Microsecond), maximum} {
+		job, created, err := repository.Enqueue(ctx, jobs.EnqueueRequest{
+			Queue: "availability", Kind: fmt.Sprintf("boundary-%d", index),
+			MaxAttempts: 1, AvailableAt: available,
+		})
+		if err != nil || !created || !job.AvailableAt.Equal(available) {
+			t.Fatalf("Enqueue(%v) = (%v, %t, %v)", available, job.AvailableAt, created, err)
+		}
+	}
+	for _, available := range []time.Time{
+		minimum.Add(-time.Microsecond),
+		maximum.Add(time.Microsecond),
+		time.Unix(18_447_690_758_509, 551_616_000).UTC(),
+	} {
+		if _, _, err := repository.Enqueue(ctx, jobs.EnqueueRequest{
+			Queue: "availability", Kind: "invalid", MaxAttempts: 1, AvailableAt: available,
+		}); !errors.Is(err, jobs.ErrInvalid) {
+			t.Fatalf("Enqueue(%v) = %v, want ErrInvalid", available, err)
+		}
+	}
+}
+
+func TestPostgreSQLStateAttemptConstraint(t *testing.T) {
+	pool, _ := integrationRepository(t)
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		state    jobs.State
+		attempts int
+		valid    bool
+	}{
+		{name: "pending zero", state: jobs.StatePending, attempts: 0, valid: true},
+		{name: "pending one", state: jobs.StatePending, attempts: 1, valid: true},
+		{name: "pending below maximum", state: jobs.StatePending, attempts: 2, valid: true},
+		{name: "pending at maximum", state: jobs.StatePending, attempts: 3},
+		{name: "running zero", state: jobs.StateRunning, attempts: 0},
+		{name: "running one", state: jobs.StateRunning, attempts: 1, valid: true},
+		{name: "running at maximum", state: jobs.StateRunning, attempts: 3, valid: true},
+		{name: "succeeded zero", state: jobs.StateSucceeded, attempts: 0},
+		{name: "succeeded one", state: jobs.StateSucceeded, attempts: 1, valid: true},
+		{name: "succeeded at maximum", state: jobs.StateSucceeded, attempts: 3, valid: true},
+		{name: "dead zero", state: jobs.StateDead, attempts: 0},
+		{name: "dead one", state: jobs.StateDead, attempts: 1, valid: true},
+		{name: "dead at maximum", state: jobs.StateDead, attempts: 3, valid: true},
+		{name: "canceled zero", state: jobs.StateCanceled, attempts: 0, valid: true},
+		{name: "canceled one", state: jobs.StateCanceled, attempts: 1, valid: true},
+		{name: "canceled at maximum", state: jobs.StateCanceled, attempts: 3, valid: true},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var leaseToken, leaseOwner any
+			var leaseUntil, finishedAt any
+			switch test.state {
+			case jobs.StateRunning:
+				leaseToken = fmt.Sprintf("%064x", index+1)
+				leaseOwner = "worker"
+				leaseUntil = time.Now().UTC().Add(time.Minute)
+			case jobs.StateSucceeded, jobs.StateDead, jobs.StateCanceled:
+				finishedAt = time.Now().UTC()
+			}
+			_, err := pool.Exec(ctx, `INSERT INTO public.gotth_jobs (
+id, queue, kind, payload, request_fingerprint, state, attempts, max_attempts,
+lease_token, lease_owner, lease_until, finished_at
+) VALUES ($1, 'constraint', 'state-attempt', ''::bytea, $2, $3, $4, 3,
+$5, $6, $7, $8)`, fmt.Sprintf("%032x", index+1), make([]byte, 32),
+				string(test.state), test.attempts, leaseToken, leaseOwner, leaseUntil, finishedAt)
+			if test.valid && err != nil {
+				t.Fatalf("insert (%s, %d) = %v", test.state, test.attempts, err)
+			}
+			if !test.valid && err == nil {
+				t.Fatalf("insert (%s, %d) accepted an impossible row", test.state, test.attempts)
+			}
+		})
 	}
 }
 

@@ -37,3 +37,20 @@ func TestMigrationsExposeOneImmutableSchema(t *testing.T) {
 		t.Fatal("migration filesystem escaped its subtree")
 	}
 }
+
+func TestMigrationConstrainsStateAttemptCombinations(t *testing.T) {
+	body, err := fs.ReadFile(jobs.Migrations(), "000001_jobs.sql")
+	if err != nil {
+		t.Fatalf("ReadFile() = %v", err)
+	}
+	for _, required := range []string{
+		"CONSTRAINT gotth_jobs_state_attempt_shape CHECK",
+		"(state = 'pending' AND attempts < max_attempts)",
+		"(state IN ('running', 'succeeded', 'dead') AND attempts >= 1)",
+		"state = 'canceled'",
+	} {
+		if !strings.Contains(string(body), required) {
+			t.Errorf("migration missing state/attempt rule %q", required)
+		}
+	}
+}

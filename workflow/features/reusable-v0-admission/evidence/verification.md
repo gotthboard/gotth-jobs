@@ -11,6 +11,11 @@
 - First independent review: `/tmp/gotth-jobs-independent-judge-1.md`.
 - Current cursor repair source:
   `9f6acc74f8901a58a3a9929d10ad7a3779241f4d`.
+- Second-review-rejected candidate:
+  `68e2f24b2f20b0c3905d46e9a228d28f044ca9a4`.
+- Second independent review: `/tmp/gotth-jobs-independent-judge-2.md`.
+- Runtime-contract repair source:
+  `b54cd4f3c385cbe0df1158c2a866efe7fbc216d1`.
 - Branch: `feature/reusable-v0-admission` in the assigned isolated worktree.
 - State: active. This repair worker does not claim independent final admission.
 - No tag, Git remote configuration, push, merge, release, pull request,
@@ -19,15 +24,17 @@
 The admission audit found unbounded enqueue timestamp encoding and impossible
 state/attempt combinations. The first independent review then found the same
 PostgreSQL encoding boundary missing from non-nil `DeadCursor.FinishedAt`.
-Those implementation defects are repaired. The historical reviews do not
-admit the current tree; two fresh attributable orchestrator-owned reviews of
-the final candidate remain required.
+Those implementation defects are repaired. The second independent review
+found that the runtime contract falsely described Claim as locking exactly one
+row. That documentation defect is corrected. The historical and rejected
+reviews do not admit the current tree; two fresh attributable
+orchestrator-owned reviews of the final candidate remain required.
 
 ## Contracts checked
 
-The worker read the full admission audit, first independent review, PRD,
+The worker read the full admission audit, both independent review reports, PRD,
 architecture, implementation specification, runtime boundary, workflow plan,
-manifest, records, and prior evidence before changing production code.
+manifest, records, and prior evidence before each bounded repair.
 
 PostgreSQL 17 accepts finite `timestamptz` values from
 `-4713-11-24T00:00:00Z` through `294276-12-31T23:59:59.999999Z` in Go's
@@ -37,6 +44,34 @@ reported fixture can wrap to Y2K. One internal predicate now enforces nonzero
 UTC, microsecond precision, and the inclusive PostgreSQL endpoints for both
 explicit enqueue availability and non-nil dead-letter cursors. The public API
 and successful-query semantics are unchanged.
+
+## Runtime-contract correction
+
+The `expired_exhausted` CTE uses `FOR UPDATE SKIP LOCKED LIMIT 100` for running
+rows with `attempts >= max_attempts`. The disjoint `candidate` CTE uses
+`FOR UPDATE SKIP LOCKED LIMIT 1` for pending rows or expired running rows with
+`attempts < max_attempts`. One Claim statement can therefore lock and update up
+to 100 exhausted rows plus at most one eligible candidate, holding at most 101
+distinct row locks until transaction end. It can perform 100 cleanup writes
+while returning no job; the public result remains limited to one eligible job.
+
+The false "locks exactly one row" sentence occurred only in the canonical
+runtime boundary. The PRD, architecture, implementation specification, and
+performance document accurately distinguish one eligible result from cleanup
+work. Historical review records were inspected but not rewritten.
+
+The correction at `b54cd4f3c385cbe0df1158c2a866efe7fbc216d1` changes only
+`docs/runtime-boundary.md`. Focused checks were:
+
+```text
+git diff --check
+repository-wide search for the rejected lock-cardinality wording
+direct inspection of claimSQL predicates, FOR UPDATE clauses, and LIMIT 100/1
+```
+
+No Go, SQL, migration, API, or runtime behavior changed, so the existing
+race, coverage, PostgreSQL, external-consumer, repeat, fuzz, performance, and
+graph gates were not rerun. Their exact source attribution below is unchanged.
 
 ## Expected-red cursor regressions
 
@@ -165,6 +200,7 @@ Artifact root:
 ## Remaining gate
 
 Implementation and proportional exact-source evidence gates are complete for
-the cursor repair. Final admission remains blocked on two attributable, fresh
-independent clean reviews pinned to the final candidate tree. Those reviews
-are orchestrator-owned; this worker neither creates them nor claims a result.
+the cursor repair, and the later runtime-contract correction is documentation
+only. Final admission remains blocked on two attributable, fresh independent
+clean reviews pinned to the final candidate tree. Those reviews are
+orchestrator-owned; this worker neither creates them nor claims a result.

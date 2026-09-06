@@ -6,6 +6,37 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 01:51 CDT — Correct Claim lock-cardinality contract
+
+Commit: `b54cd4f3c385cbe0df1158c2a866efe7fbc216d1`
+
+Affected file:
+
+- `docs/runtime-boundary.md`
+
+Explanation:
+
+Correct the runtime contract to match the existing bounded Claim statement.
+One call can lock and update up to 100 expired, exhausted rows plus at most one
+disjoint eligible candidate, holding at most 101 row locks until the short
+transaction ends. It may perform 100 cleanup writes while returning no job;
+the eligible result remains limited to one job.
+
+Verification:
+
+- inspected both disjoint `FOR UPDATE SKIP LOCKED` CTE predicates and limits
+- searched canonical documentation and evidence for the rejected false claim
+- passed whitespace, workflow-format, and exact-head cleanliness checks
+
+Risks / non-goals:
+
+- No code, SQL, public API, or runtime behavior changed.
+- Existing implementation gates remain bound to exact source `9f6acc74`; no
+  unrelated heavy gate was rerun for this documentation-only correction.
+- Two fresh independent clean reviews remain orchestrator-owned. This repair
+  does not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 01:28 CDT — Validate dead-letter cursor timestamps
 
 Commit: `9f6acc74f8901a58a3a9929d10ad7a3779241f4d`

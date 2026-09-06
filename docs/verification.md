@@ -21,7 +21,18 @@ Current repair verification:
   this bounded validation-only repair and are not current-source evidence.
 - The first independent review rejected candidate
   `671a1eac9ddc6d273136d46de6d906730c7182e5`. Its cursor defect is repaired,
-  but two attributable fresh independent reviews of the final candidate remain
+  and exact implementation gates remain bound to repair source `9f6acc74`.
+- The second independent review rejected documentation candidate
+  `68e2f24b2f20b0c3905d46e9a228d28f044ca9a4` because the runtime contract
+  understated Claim's lock and cleanup cardinality. Documentation repair
+  `b54cd4f3c385cbe0df1158c2a866efe7fbc216d1` now records up to 100 exhausted
+  cleanup rows plus at most one disjoint eligible candidate, with locks held
+  to transaction end and at most one returned job.
+- The second repair changes no Go or SQL. Focused contract inspection,
+  repository-wide false-claim search, whitespace checks, and workflow-format
+  validation are proportional; prior race, coverage, PostgreSQL, external,
+  repeat, fuzz, performance, and graph evidence was not rerun or rebound.
+- Two attributable fresh independent reviews of the final candidate remain
   required and are orchestrator-owned.
 
 Exact commands, artifact hashes, environment differences, and the remaining

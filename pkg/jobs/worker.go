@@ -153,6 +153,9 @@ func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 	cancel(errHandlerFinished)
 	heartbeatErr := <-heartbeatResult
 
+	if errors.Is(heartbeatErr, ErrCommitOutcomeUnknown) {
+		return &LeaseReconciliationError{job: job, lease: job.Lease, err: heartbeatErr}
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -161,9 +164,6 @@ func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 	if heartbeatErr != nil && !stoppedAfterHandler {
 		if errors.Is(heartbeatErr, ErrCanceled) {
 			return nil
-		}
-		if errors.Is(heartbeatErr, ErrCommitOutcomeUnknown) {
-			return &LeaseReconciliationError{job: job, lease: job.Lease, err: heartbeatErr}
 		}
 		return fmt.Errorf("heartbeat worker job: %w", heartbeatErr)
 	}

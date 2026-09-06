@@ -8,4 +8,5 @@ verify:
 
 verify-integration:
 	test -n "$${GOTTH_JOBS_TEST_DATABASE_URL}"
+	test "$${GOTTH_JOBS_ALLOW_DESTRUCTIVE_TEST_DATABASE_RESET}" = "true"
 	go test -mod=readonly -race -tags=integration ./...

@@ -40,36 +40,72 @@ func jobQueryArguments(arguments ...any) []any {
 	return append(result, arguments...)
 }
 
-type boundedPayloadScanner struct {
-	value []byte
+type boundedBytesScanner struct {
+	label   string
+	minimum int
+	maximum int
+	value   []byte
 }
 
-var _ pgtype.BytesScanner = (*boundedPayloadScanner)(nil)
+var _ pgtype.BytesScanner = (*boundedBytesScanner)(nil)
 
 // ScanBytes rejects an untrusted bytea length before allocation and makes the
 // one owning copy required beyond pgx's borrowed driver-memory lifetime.
 //
-// Complexity: for accepted payload size p, time and auxiliary space are tight
-// Theta(p); rejection time and auxiliary space are tight Theta(1).
-func (scanner *boundedPayloadScanner) ScanBytes(source []byte) error {
+// Complexity: for accepted source size n, time and auxiliary space are tight
+// Theta(n); rejection time and auxiliary space are tight Theta(1).
+func (scanner *boundedBytesScanner) ScanBytes(source []byte) error {
 	if source == nil {
-		return fmt.Errorf("stored job payload is NULL")
+		return fmt.Errorf("stored job %s is NULL", scanner.label)
 	}
-	if len(source) > MaxPayloadBytes {
-		return fmt.Errorf("stored job payload exceeds the schema contract")
+	if len(source) < scanner.minimum || len(source) > scanner.maximum {
+		return fmt.Errorf("stored job %s violates the schema length contract", scanner.label)
 	}
 	scanner.value = make([]byte, len(source))
 	copy(scanner.value, source)
 	return nil
 }
 
+type boundedTextScanner struct {
+	label    string
+	minimum  int
+	maximum  int
+	nullable bool
+	present  bool
+	value    string
+}
+
+var _ pgtype.BytesScanner = (*boundedTextScanner)(nil)
+
+// ScanBytes checks borrowed text bytes before the one string conversion that
+// gives the returned Job ownership beyond pgx's driver-memory lifetime.
+//
+// Complexity: for accepted source size n, time and auxiliary space are tight
+// Theta(n); rejection time and auxiliary space are tight Theta(1).
+func (scanner *boundedTextScanner) ScanBytes(source []byte) error {
+	if source == nil {
+		if scanner.nullable {
+			scanner.present = false
+			scanner.value = ""
+			return nil
+		}
+		return fmt.Errorf("stored job %s is NULL", scanner.label)
+	}
+	scanner.present = true
+	if len(source) < scanner.minimum || len(source) > scanner.maximum {
+		return fmt.Errorf("stored job %s violates the schema length contract", scanner.label)
+	}
+	scanner.value = string(source)
+	return nil
+}
+
 // scanJob converts one untrusted database row into a copied public value and
 // rejects impossible states even if database constraints were bypassed.
 //
-// Complexity: for payload size p, time and auxiliary space are O(p), Omega(1),
-// and tight Theta(p) for an accepted payload; one delegated row scan is
-// required. Oversized payload rejection is constant-time and allocates no
-// payload-sized storage.
+// Complexity: for total accepted variable-width data n, time and auxiliary
+// space are O(n), Omega(1), and tight Theta(n); one delegated row scan is
+// required. A bounded-column length rejection is constant-time and makes no
+// ownership allocation for that column.
 func scanJob(row pgx.Row) (Job, error) {
 	return scanJobRow(row, nil)
 }
@@ -77,46 +113,54 @@ func scanJob(row pgx.Row) (Job, error) {
 // scanJobWithFingerprint converts a fingerprint and complete job selected
 // from one row and statement snapshot into copied public values.
 //
-// Complexity: for payload size p, time and auxiliary space are O(p), Omega(1),
-// and tight Theta(p) for an accepted payload; one delegated row scan is
-// required. Oversized payload rejection is constant-time and allocates no
-// payload-sized storage.
+// Complexity: for total accepted variable-width data n, time and auxiliary
+// space are O(n), Omega(1), and tight Theta(n); one delegated row scan is
+// required. A bounded-column length rejection is constant-time and makes no
+// ownership allocation for that column.
 func scanJobWithFingerprint(row pgx.Row) ([]byte, Job, error) {
-	var fingerprint []byte
+	fingerprint := boundedBytesScanner{
+		label: "request fingerprint", minimum: 32, maximum: 32,
+	}
 	job, err := scanJobRow(row, &fingerprint)
 	if err != nil {
 		return nil, Job{}, err
 	}
-	return fingerprint, job, nil
+	return fingerprint.value, job, nil
 }
 
 // scanJobRow owns the shared decoding and validation for ordinary job rows
 // and idempotency rows with a leading fingerprint column.
 //
-// Complexity: for payload size p, time and auxiliary space are O(p), Omega(1),
-// and tight Theta(p) for an accepted payload; one delegated row scan is
-// required. Oversized payload rejection is constant-time and allocates no
-// payload-sized storage.
-func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
+// Complexity: for total accepted variable-width data n, time and auxiliary
+// space are O(n), Omega(1), and tight Theta(n); one delegated row scan is
+// required. A bounded-column length rejection is constant-time and makes no
+// ownership allocation for that column.
+func scanJobRow(row pgx.Row, fingerprint *boundedBytesScanner) (Job, error) {
 	var job Job
-	var payload boundedPayloadScanner
-	var state string
-	var key, token, owner *string
+	id := boundedTextScanner{label: "ID", minimum: 32, maximum: 32}
+	queue := boundedTextScanner{label: "queue", minimum: 1, maximum: MaxQueueBytes}
+	kind := boundedTextScanner{label: "kind", minimum: 1, maximum: MaxKindBytes}
+	payload := boundedBytesScanner{label: "payload", maximum: MaxPayloadBytes}
+	key := boundedTextScanner{label: "idempotency key", minimum: 1, maximum: MaxIdempotencyKeyBytes, nullable: true}
+	state := boundedTextScanner{label: "state", minimum: 1, maximum: len(StateSucceeded)}
+	token := boundedTextScanner{label: "lease token", minimum: 64, maximum: 64, nullable: true}
+	owner := boundedTextScanner{label: "lease owner", minimum: 1, maximum: MaxWorkerBytes, nullable: true}
+	lastError := boundedTextScanner{label: "last error", maximum: MaxFailureBytes}
 	var availableAt, createdAt, updatedAt, leaseUntil, finishedAt *time.Time
 	var err error
 	if fingerprint == nil {
 		err = row.Scan(
-			&job.ID, &job.Queue, &job.Kind, &payload, &key, &state,
+			&id, &queue, &kind, &payload, &key, &state,
 			&job.Attempts, &job.MaxAttempts, &availableAt, &createdAt,
-			&updatedAt, &token, &owner, &leaseUntil, &job.LastError,
+			&updatedAt, &token, &owner, &leaseUntil, &lastError,
 			&finishedAt,
 		)
 	} else {
 		err = row.Scan(
-			fingerprint, &job.ID, &job.Queue, &job.Kind, &payload, &key,
+			fingerprint, &id, &queue, &kind, &payload, &key,
 			&state, &job.Attempts, &job.MaxAttempts, &availableAt,
 			&createdAt, &updatedAt, &token, &owner, &leaseUntil,
-			&job.LastError, &finishedAt,
+			&lastError, &finishedAt,
 		)
 	}
 	if err != nil {
@@ -125,16 +169,20 @@ func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
 	if availableAt == nil || createdAt == nil || updatedAt == nil {
 		return Job{}, fmt.Errorf("stored job has NULL mandatory timestamp")
 	}
+	job.ID = id.value
+	job.Queue = queue.value
+	job.Kind = kind.value
 	job.Payload = payload.value
-	job.State = State(state)
-	if key != nil {
-		job.IdempotencyKey = *key
+	job.State = State(state.value)
+	job.LastError = lastError.value
+	if key.present {
+		job.IdempotencyKey = key.value
 	}
-	if token != nil {
-		job.Lease = Lease{JobID: job.ID, Token: *token}
+	if token.present {
+		job.Lease = Lease{JobID: job.ID, Token: token.value}
 	}
-	if owner != nil {
-		job.LeaseOwner = *owner
+	if owner.present {
+		job.LeaseOwner = owner.value
 	}
 	job.AvailableAt = availableAt.UTC()
 	job.CreatedAt = createdAt.UTC()
@@ -196,7 +244,7 @@ func validateStoredJob(job Job) error {
 	}
 	switch job.State {
 	case StatePending, StateSucceeded, StateDead, StateCanceled:
-		if job.Lease.Token != "" || job.LeaseOwner != "" || !job.LeaseUntil.IsZero() {
+		if job.Lease != (Lease{}) || job.LeaseOwner != "" || !job.LeaseUntil.IsZero() {
 			return fmt.Errorf("stored non-running job has lease state")
 		}
 	case StateRunning:

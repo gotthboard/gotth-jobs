@@ -15,8 +15,118 @@ import (
 
 	"github.com/gotthboard/gotth-jobs/pkg/jobs"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+const (
+	destructiveIntegrationOptInEnv = "GOTTH_JOBS_ALLOW_DESTRUCTIVE_TEST_DATABASE_RESET"
+	dedicatedIntegrationDatabase   = "gotth_jobs_test"
+	dedicatedIntegrationMarker     = "gotth-jobs:dedicated-destructive-integration-test-v1"
+)
+
+type destructiveIntegrationDatabase interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+type destructiveIntegrationSpy struct {
+	database string
+	marker   any
+	queries  int
+	execs    int
+}
+
+func (spy *destructiveIntegrationSpy) QueryRow(context.Context, string, ...any) pgx.Row {
+	spy.queries++
+	return destructiveIdentityRow{database: spy.database, marker: spy.marker}
+}
+
+func (spy *destructiveIntegrationSpy) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	spy.execs++
+	return pgconn.CommandTag{}, nil
+}
+
+type destructiveIdentityRow struct {
+	database string
+	marker   any
+}
+
+func (row destructiveIdentityRow) Scan(destinations ...any) error {
+	if len(destinations) != 2 {
+		return fmt.Errorf("unexpected identity scan width %d", len(destinations))
+	}
+	*destinations[0].(*string) = row.database
+	marker := destinations[1].(**string)
+	if row.marker == nil {
+		*marker = nil
+	} else {
+		value := row.marker.(string)
+		*marker = &value
+	}
+	return nil
+}
+
+func TestDestructiveIntegrationResetRequiresExplicitDedicatedIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		optIn    string
+		database string
+		marker   any
+		allowed  bool
+	}{
+		{name: "missing opt-in", database: "gotth_jobs_test", marker: "gotth-jobs:dedicated-destructive-integration-test-v1"},
+		{name: "wrong opt-in", optIn: "yes", database: "gotth_jobs_test", marker: "gotth-jobs:dedicated-destructive-integration-test-v1"},
+		{name: "wrong database", optIn: "true", database: "postgres", marker: "gotth-jobs:dedicated-destructive-integration-test-v1"},
+		{name: "missing marker", optIn: "true", database: "gotth_jobs_test"},
+		{name: "wrong marker", optIn: "true", database: "gotth_jobs_test", marker: "development"},
+		{name: "exact authorization", optIn: "true", database: "gotth_jobs_test", marker: "gotth-jobs:dedicated-destructive-integration-test-v1", allowed: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			spy := &destructiveIntegrationSpy{database: test.database, marker: test.marker}
+			err := resetIntegrationSchema(context.Background(), spy, test.optIn)
+			if test.allowed && err != nil {
+				t.Fatalf("resetIntegrationSchema() = %v", err)
+			}
+			if !test.allowed && err == nil {
+				t.Fatal("resetIntegrationSchema() succeeded without exact authorization")
+			}
+			wantExecs := 0
+			if test.allowed {
+				wantExecs = 1
+			}
+			if spy.execs != wantExecs {
+				t.Fatalf("destructive executions = %d, want %d", spy.execs, wantExecs)
+			}
+			if test.optIn != "true" && spy.queries != 0 {
+				t.Fatalf("identity queries = %d before explicit opt-in", spy.queries)
+			}
+		})
+	}
+}
+
+func resetIntegrationSchema(ctx context.Context, database destructiveIntegrationDatabase, optIn string) error {
+	if optIn != "true" {
+		return fmt.Errorf("%s=true is required for destructive integration reset", destructiveIntegrationOptInEnv)
+	}
+	var databaseName string
+	var marker *string
+	if err := database.QueryRow(ctx, `
+SELECT current_database(), pg_catalog.shobj_description(oid, 'pg_database')
+FROM pg_catalog.pg_database
+WHERE datname = current_database()
+`).Scan(&databaseName, &marker); err != nil {
+		return fmt.Errorf("verify destructive integration database identity: %w", err)
+	}
+	if databaseName != dedicatedIntegrationDatabase || marker == nil || *marker != dedicatedIntegrationMarker {
+		return fmt.Errorf("refusing destructive integration reset for database %q without exact dedicated marker", databaseName)
+	}
+	if _, err := database.Exec(ctx, "DROP TABLE IF EXISTS public.gotth_job_consumer; DROP TABLE IF EXISTS public.gotth_jobs"); err != nil {
+		return fmt.Errorf("reset integration schema: %w", err)
+	}
+	return nil
+}
 
 func integrationRepository(t *testing.T) (*pgxpool.Pool, *jobs.PostgreSQL) {
 	return integrationRepositoryWithMode(t, pgx.QueryExecModeCacheStatement)
@@ -27,6 +137,10 @@ func integrationRepositoryWithMode(t *testing.T, mode pgx.QueryExecMode) (*pgxpo
 	databaseURL := os.Getenv("GOTTH_JOBS_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Fatal("GOTTH_JOBS_TEST_DATABASE_URL is required")
+	}
+	destructiveOptIn := os.Getenv(destructiveIntegrationOptInEnv)
+	if destructiveOptIn != "true" {
+		t.Fatalf("%s=true is required", destructiveIntegrationOptInEnv)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -52,8 +166,8 @@ func integrationRepositoryWithMode(t *testing.T, mode pgx.QueryExecMode) (*pgxpo
 	if err := pool.QueryRow(ctx, "SHOW server_encoding").Scan(&encoding); err != nil || encoding != "UTF8" {
 		t.Fatalf("PostgreSQL encoding = %q, %v; want UTF8", encoding, err)
 	}
-	if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS public.gotth_job_consumer; DROP TABLE IF EXISTS public.gotth_jobs"); err != nil {
-		t.Fatalf("reset schema: %v", err)
+	if err := resetIntegrationSchema(ctx, pool, destructiveOptIn); err != nil {
+		t.Fatal(err)
 	}
 	migration, err := fs.ReadFile(jobs.Migrations(), "000001_jobs.sql")
 	if err != nil {
@@ -136,6 +250,95 @@ func TestPostgreSQLJobPayloadScanningAcrossDefaultQueryModes(t *testing.T) {
 		}
 		if result.oversize > baseline.oversize+jobs.MaxPayloadBytes/2 {
 			t.Errorf("mode %s allocates a decoded oversized payload: baseline=%d mode=%d", name, baseline.oversize, result.oversize)
+		}
+	}
+}
+
+func TestPostgreSQLTextAndFingerprintBoundsAcrossDefaultQueryModes(t *testing.T) {
+	type allocationResult struct {
+		text        int64
+		fingerprint int64
+	}
+	modes := []struct {
+		name string
+		mode pgx.QueryExecMode
+	}{
+		{name: "cache statement", mode: pgx.QueryExecModeCacheStatement},
+		{name: "cache describe", mode: pgx.QueryExecModeCacheDescribe},
+		{name: "describe exec", mode: pgx.QueryExecModeDescribeExec},
+		{name: "exec", mode: pgx.QueryExecModeExec},
+		{name: "simple protocol", mode: pgx.QueryExecModeSimpleProtocol},
+	}
+	results := make(map[string]allocationResult, len(modes))
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			pool, repository := integrationRepositoryWithMode(t, mode.mode)
+			ctx := context.Background()
+			request := jobs.EnqueueRequest{
+				Queue: "query-mode", Kind: "bounded", Payload: []byte("payload"),
+				IdempotencyKey: "bounded-row", MaxAttempts: 1,
+			}
+			created, wasCreated, err := repository.Enqueue(ctx, request)
+			if err != nil || !wasCreated {
+				t.Fatalf("Enqueue() = (%+v, %t, %v)", created, wasCreated, err)
+			}
+			oversized := make([]byte, jobs.MaxPayloadBytes+1)
+			for index := range oversized {
+				oversized[index] = 'x'
+			}
+			if _, err := pool.Exec(ctx, "ALTER TABLE public.gotth_jobs DROP CONSTRAINT gotth_jobs_kind_length"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, "UPDATE public.gotth_jobs SET kind = convert_from($2, 'UTF8') WHERE id = $1", created.ID, oversized); err != nil {
+				t.Fatal(err)
+			}
+			textResult := testing.Benchmark(func(b *testing.B) {
+				b.ReportAllocs()
+				for range b.N {
+					if _, err := repository.Get(ctx, created.ID); err == nil {
+						b.Fatal("Get(oversized text) succeeded")
+					}
+				}
+			})
+
+			if _, err := pool.Exec(ctx, "UPDATE public.gotth_jobs SET kind = $2 WHERE id = $1", created.ID, request.Kind); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, "ALTER TABLE public.gotth_jobs DROP CONSTRAINT gotth_jobs_fingerprint_length"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, "UPDATE public.gotth_jobs SET request_fingerprint = $2 WHERE id = $1", created.ID, oversized); err != nil {
+				t.Fatal(err)
+			}
+			fingerprintResult := testing.Benchmark(func(b *testing.B) {
+				b.ReportAllocs()
+				for range b.N {
+					if _, _, err := repository.Enqueue(ctx, request); err == nil {
+						b.Fatal("Enqueue(oversized fingerprint) succeeded")
+					}
+				}
+			})
+			result := allocationResult{
+				text:        textResult.AllocedBytesPerOp(),
+				fingerprint: fingerprintResult.AllocedBytesPerOp(),
+			}
+			results[mode.name] = result
+			t.Logf("mode=%s oversized_text=%d_bytes/op oversized_fingerprint=%d_bytes/op", mode.name, result.text, result.fingerprint)
+			if result.text >= int64(len(oversized)) {
+				t.Errorf("oversized text rejection allocated %d bytes/op", result.text)
+			}
+			if result.fingerprint >= int64(len(oversized)) {
+				t.Errorf("oversized fingerprint rejection allocated %d bytes/op", result.fingerprint)
+			}
+		})
+	}
+	baseline := results["cache statement"]
+	for name, result := range results {
+		if result.text > baseline.text+jobs.MaxPayloadBytes/2 {
+			t.Errorf("mode %s adds a source-sized text allocation: baseline=%d mode=%d", name, baseline.text, result.text)
+		}
+		if result.fingerprint > baseline.fingerprint+jobs.MaxPayloadBytes/2 {
+			t.Errorf("mode %s adds a source-sized fingerprint allocation: baseline=%d mode=%d", name, baseline.fingerprint, result.fingerprint)
 		}
 	}
 }

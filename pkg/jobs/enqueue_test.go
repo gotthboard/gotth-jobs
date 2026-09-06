@@ -33,7 +33,17 @@ func (row stubRow) Scan(destinations ...any) error {
 		case *[]byte:
 			*target = append((*target)[:0], value.([]byte)...)
 		case pgtype.BytesScanner:
-			if err := target.ScanBytes(value.([]byte)); err != nil {
+			var source []byte
+			switch value := value.(type) {
+			case nil:
+			case string:
+				source = []byte(value)
+			case []byte:
+				source = value
+			default:
+				return errors.New("unsupported byte scanner source")
+			}
+			if err := target.ScanBytes(source); err != nil {
 				return err
 			}
 		case *bool:
@@ -67,6 +77,24 @@ func (row stubRow) Scan(destinations ...any) error {
 		}
 	}
 	return nil
+}
+
+type borrowedScannerRow struct {
+	stubRow
+	fingerprint bool
+}
+
+func (row borrowedScannerRow) Scan(destinations ...any) error {
+	variableColumns := []int{0, 1, 2, 3, 4, 5, 11, 12, 14}
+	if row.fingerprint {
+		variableColumns = []int{0, 1, 2, 3, 4, 5, 6, 12, 13, 15}
+	}
+	for _, index := range variableColumns {
+		if _, ok := destinations[index].(pgtype.BytesScanner); !ok {
+			return errors.New("variable-width job column does not use pgtype.BytesScanner")
+		}
+	}
+	return row.stubRow.Scan(destinations...)
 }
 
 type stubTx struct {

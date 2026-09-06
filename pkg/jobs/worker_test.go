@@ -311,6 +311,99 @@ func TestWorkerHandlerCompletionCancelsBlockedHeartbeat(t *testing.T) {
 	}
 }
 
+func TestWorkerUnknownHeartbeatOutranksParentCancellation(t *testing.T) {
+	job := claimedJob(1)
+	heartbeatStarted := make(chan struct{})
+	parent, cancelParent := context.WithCancel(context.Background())
+	defer cancelParent()
+	completeCalls := 0
+	failCalls := 0
+	store := &stubStore{
+		heartbeat: func(ctx context.Context, _ Lease, _ time.Duration) error {
+			close(heartbeatStarted)
+			<-ctx.Done()
+			return errors.Join(ErrCommitOutcomeUnknown, ctx.Err())
+		},
+		complete: func(context.Context, Lease) (Job, error) {
+			completeCalls++
+			return Job{}, nil
+		},
+		fail: func(context.Context, Lease, Failure) (Job, error) {
+			failCalls++
+			return Job{}, nil
+		},
+	}
+	worker := validWorker(store, func(ctx context.Context, _ Job) error {
+		<-heartbeatStarted
+		cancelParent()
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	worker.HeartbeatInterval = time.Millisecond
+
+	err := worker.runAttempt(parent, job)
+	assertLeaseReconciliationError(t, err, job)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runAttempt() = %v, want joined parent cancellation", err)
+	}
+	if completeCalls != 0 || failCalls != 0 {
+		t.Fatalf("post-unknown acknowledgements = complete %d, fail %d", completeCalls, failCalls)
+	}
+}
+
+func TestWorkerUnknownHeartbeatOutranksLocalTeardownCancellation(t *testing.T) {
+	job := claimedJob(1)
+	heartbeatStarted := make(chan struct{})
+	completeCalls := 0
+	failCalls := 0
+	store := &stubStore{
+		heartbeat: func(ctx context.Context, _ Lease, _ time.Duration) error {
+			close(heartbeatStarted)
+			<-ctx.Done()
+			return errors.Join(ErrCommitOutcomeUnknown, ctx.Err())
+		},
+		complete: func(context.Context, Lease) (Job, error) {
+			completeCalls++
+			return Job{}, nil
+		},
+		fail: func(context.Context, Lease, Failure) (Job, error) {
+			failCalls++
+			return Job{}, nil
+		},
+	}
+	worker := validWorker(store, func(context.Context, Job) error {
+		<-heartbeatStarted
+		return nil
+	})
+	worker.HeartbeatInterval = time.Millisecond
+
+	err := worker.runAttempt(context.Background(), job)
+	assertLeaseReconciliationError(t, err, job)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("runAttempt() = %v, want joined local teardown cancellation", err)
+	}
+	if completeCalls != 0 || failCalls != 0 {
+		t.Fatalf("post-unknown acknowledgements = complete %d, fail %d", completeCalls, failCalls)
+	}
+}
+
+func assertLeaseReconciliationError(t *testing.T, err error, job Job) {
+	t.Helper()
+	if !errors.Is(err, ErrCommitOutcomeUnknown) {
+		t.Fatalf("runAttempt() = %v, want ErrCommitOutcomeUnknown", err)
+	}
+	var reconciliation *LeaseReconciliationError
+	if !errors.As(err, &reconciliation) {
+		t.Fatalf("runAttempt() error %T has no lease reconciliation accessors", err)
+	}
+	if reconciliation.ReconciliationJob().ID != job.ID || reconciliation.ReconciliationLease() != job.Lease {
+		t.Fatalf("reconciliation identity = %+v/%+v, want %s/%+v", reconciliation.ReconciliationJob(), reconciliation.ReconciliationLease(), job.ID, job.Lease)
+	}
+	if strings.Contains(err.Error(), job.ID) || strings.Contains(err.Error(), job.Lease.Token) {
+		t.Fatalf("reconciliation error leaks identity or token: %q", err)
+	}
+}
+
 func TestWorkerBoundsFailureText(t *testing.T) {
 	job := claimedJob(1)
 	var got Failure

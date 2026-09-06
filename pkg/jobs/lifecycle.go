@@ -231,20 +231,27 @@ func (repository *PostgreSQL) leaseMutation(ctx context.Context, lease Lease, st
 // classifyLease maps a failed fenced update to a stable public error using the
 // current row state in the same transaction.
 //
-// Complexity: local time and space are tight Theta(1); database cost is one
-// primary-key read.
+// Complexity: for accepted state bytes s, local time and auxiliary space are
+// tight Theta(s); malformed over-limit rejection is tight Theta(1). Database
+// cost is one primary-key read.
 func classifyLease(ctx context.Context, transaction pgx.Tx, id string) error {
-	var state string
+	state := boundedTextScanner{
+		label: "state", minimum: 1, maximum: len(StateSucceeded),
+	}
 	if err := transaction.QueryRow(ctx, leaseStateSQL, id).Scan(&state); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
-		return fmt.Errorf("classify rejected job lease: %w", err)
+		return fmt.Errorf("classify rejected job lease: corrupt stored state: %w", err)
 	}
-	if State(state) == StateCanceled {
+	switch State(state.value) {
+	case StateCanceled:
 		return ErrCanceled
+	case StatePending, StateRunning, StateSucceeded, StateDead:
+		return ErrLeaseLost
+	default:
+		return fmt.Errorf("classify rejected job lease: corrupt stored state %q", state.value)
 	}
-	return ErrLeaseLost
 }
 
 // validateLeaseOperation checks shared repository, context, identifier, and

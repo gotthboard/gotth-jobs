@@ -12,10 +12,11 @@ const getSQL = `SELECT ` + jobColumns + ` FROM public.gotth_jobs WHERE id = $1`
 
 const countsSQL = `SELECT
     count(*) FILTER (WHERE state = 'pending'),
-    count(*) FILTER (WHERE state = 'running'),
-    count(*) FILTER (WHERE state = 'succeeded'),
-    count(*) FILTER (WHERE state = 'dead'),
-    count(*) FILTER (WHERE state = 'canceled')
+	count(*) FILTER (WHERE state = 'running'),
+	count(*) FILTER (WHERE state = 'succeeded'),
+	count(*) FILTER (WHERE state = 'dead'),
+	count(*) FILTER (WHERE state = 'canceled'),
+	count(*)
 FROM public.gotth_jobs WHERE queue = $1`
 
 const listDeadSQL = `SELECT ` + jobColumns + ` FROM public.gotth_jobs
@@ -73,11 +74,16 @@ func (repository *PostgreSQL) Counts(ctx context.Context, queue string) (Counts,
 		return Counts{}, err
 	}
 	var counts Counts
+	var total int64
 	if err := repository.database.QueryRow(ctx, countsSQL, queue).Scan(
 		&counts.Pending, &counts.Running, &counts.Succeeded, &counts.Dead,
-		&counts.Canceled,
+		&counts.Canceled, &total,
 	); err != nil {
 		return Counts{}, fmt.Errorf("count jobs: %w", err)
+	}
+	known := counts.Pending + counts.Running + counts.Succeeded + counts.Dead + counts.Canceled
+	if total != known {
+		return Counts{}, fmt.Errorf("count jobs: corrupt stored state totals")
 	}
 	return counts, nil
 }

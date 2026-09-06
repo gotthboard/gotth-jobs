@@ -8,7 +8,22 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+type borrowedLeaseStateRow struct {
+	stubRow
+}
+
+func (row borrowedLeaseStateRow) Scan(destinations ...any) error {
+	if len(destinations) != 1 {
+		return errors.New("unexpected lease state scan width")
+	}
+	if _, ok := destinations[0].(pgtype.BytesScanner); !ok {
+		return errors.New("lease state does not use pgtype.BytesScanner")
+	}
+	return row.stubRow.Scan(destinations...)
+}
 
 func runningJobRow(id, token string, attempts int) stubRow {
 	now := time.Unix(1_900_000_000, 0).UTC()
@@ -142,7 +157,10 @@ func TestHeartbeatClassifiesRejectedLease(t *testing.T) {
 	}{
 		{name: "missing", stateRow: stubRow{err: pgx.ErrNoRows}, want: ErrNotFound},
 		{name: "canceled", stateRow: stubRow{values: []any{string(StateCanceled)}}, want: ErrCanceled},
-		{name: "lost", stateRow: stubRow{values: []any{string(StateRunning)}}, want: ErrLeaseLost},
+		{name: "pending", stateRow: stubRow{values: []any{string(StatePending)}}, want: ErrLeaseLost},
+		{name: "running", stateRow: stubRow{values: []any{string(StateRunning)}}, want: ErrLeaseLost},
+		{name: "succeeded", stateRow: stubRow{values: []any{string(StateSucceeded)}}, want: ErrLeaseLost},
+		{name: "dead", stateRow: stubRow{values: []any{string(StateDead)}}, want: ErrLeaseLost},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -150,6 +168,49 @@ func TestHeartbeatClassifiesRejectedLease(t *testing.T) {
 			repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
 			if err := repository.Heartbeat(context.Background(), lease, time.Minute); !errors.Is(err, test.want) || tx.commits != 0 {
 				t.Fatalf("Heartbeat() = %v, want %v; commits=%d", err, test.want, tx.commits)
+			}
+		})
+	}
+}
+
+func TestLeaseClassificationUsesBoundedBorrowedStateScanner(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	lease := Lease{JobID: id, Token: strings.Repeat("ab", 32)}
+	tx := &stubTx{rows: []pgx.Row{
+		stubRow{err: pgx.ErrNoRows},
+		borrowedLeaseStateRow{stubRow{values: []any{string(StateRunning)}}},
+	}}
+	repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
+	if err := repository.Heartbeat(context.Background(), lease, time.Minute); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("Heartbeat() = %v, want ErrLeaseLost", err)
+	}
+}
+
+func TestLeaseClassificationRejectsCorruptStoredState(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	lease := Lease{JobID: id, Token: strings.Repeat("ab", 32)}
+	for _, test := range []struct {
+		name  string
+		state any
+	}{
+		{name: "oversized", state: strings.Repeat("x", len(StateSucceeded)+1)},
+		{name: "unknown", state: "unknown"},
+		{name: "NULL", state: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			tx := &stubTx{rows: []pgx.Row{
+				stubRow{err: pgx.ErrNoRows},
+				stubRow{values: []any{test.state}},
+			}}
+			repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
+			err := repository.Heartbeat(context.Background(), lease, time.Minute)
+			if err == nil || !strings.Contains(err.Error(), "corrupt stored state") {
+				t.Fatalf("Heartbeat(%s state) = %v, want corruption error", test.name, err)
+			}
+			for _, ordinary := range []error{ErrNotFound, ErrCanceled, ErrLeaseLost} {
+				if errors.Is(err, ordinary) {
+					t.Fatalf("Heartbeat(%s state) = %v, incorrectly matches %v", test.name, err, ordinary)
+				}
 			}
 		})
 	}

@@ -39,7 +39,7 @@ func TestGetAndCountsReturnBoundedObservations(t *testing.T) {
 	request := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), MaxAttempts: 3, AvailableAt: time.Unix(1_900_000_000, 0).UTC()}
 	database := &stubDatabase{directRows: []pgx.Row{
 		jobRow(id, request, StatePending),
-		stubRow{values: []any{int64(1), int64(2), int64(3), int64(4), int64(5)}},
+		stubRow{values: []any{int64(1), int64(2), int64(3), int64(4), int64(5), int64(15)}},
 	}}
 	repository, _ := NewPostgreSQL(database)
 	job, err := repository.Get(context.Background(), id)
@@ -56,6 +56,24 @@ func TestGetAndCountsReturnBoundedObservations(t *testing.T) {
 	}
 	if _, err := repository.Counts(context.Background(), "bad queue"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Counts(bad) = %v", err)
+	}
+}
+
+func TestCountsRejectsUnknownOrNullStoredState(t *testing.T) {
+	for _, name := range []string{"unknown", "NULL"} {
+		t.Run(name, func(t *testing.T) {
+			database := &stubDatabase{directRows: []pgx.Row{stubRow{values: []any{
+				int64(1), int64(2), int64(3), int64(4), int64(5), int64(16),
+			}}}}
+			repository, _ := NewPostgreSQL(database)
+			counts, err := repository.Counts(context.Background(), "default")
+			if err == nil || counts != (Counts{}) || !strings.Contains(err.Error(), "corrupt stored state") {
+				t.Fatalf("Counts(%s state) = (%+v, %v), want zero and corruption error", name, counts, err)
+			}
+			if len(database.statements) != 1 || !strings.Contains(database.statements[0], "count(*)") {
+				t.Fatalf("Counts SQL = %q, want total completeness count", database.statements)
+			}
+		})
 	}
 }
 

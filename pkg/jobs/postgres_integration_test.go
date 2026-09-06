@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -541,6 +542,107 @@ func TestPostgreSQLHeartbeatAllocationIndependentOfPayload(t *testing.T) {
 	maximumBytes := measure("heartbeat-maximum", make([]byte, jobs.MaxPayloadBytes))
 	if maximumBytes > emptyBytes+64*1024 {
 		t.Fatalf("Heartbeat allocations depend on payload: empty=%d maximum=%d bytes/op", emptyBytes, maximumBytes)
+	}
+}
+
+func dropStoredStateGuards(t *testing.T, pool *pgxpool.Pool, allowNull bool) {
+	t.Helper()
+	statement := `ALTER TABLE public.gotth_jobs
+DROP CONSTRAINT gotth_jobs_state,
+DROP CONSTRAINT gotth_jobs_state_attempt_shape,
+DROP CONSTRAINT gotth_jobs_finished_shape`
+	if allowNull {
+		statement += `, ALTER COLUMN state DROP NOT NULL`
+	}
+	if _, err := pool.Exec(context.Background(), statement); err != nil {
+		t.Fatalf("drop stored-state guards: %v", err)
+	}
+}
+
+func TestPostgreSQLLeaseAndCountsRejectMalformedStoredState(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		state     any
+		allowNull bool
+	}{
+		{name: "unknown", state: "unknown"},
+		{name: "NULL", state: nil, allowNull: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pool, repository := integrationRepository(t)
+			ctx := context.Background()
+			created, wasCreated, err := repository.Enqueue(ctx, jobs.EnqueueRequest{
+				Queue: "corrupt-state", Kind: "scalar-read", MaxAttempts: 1,
+			})
+			if err != nil || !wasCreated {
+				t.Fatalf("Enqueue() = (%+v, %t, %v)", created, wasCreated, err)
+			}
+			dropStoredStateGuards(t, pool, test.allowNull)
+			if _, err := pool.Exec(ctx, "UPDATE public.gotth_jobs SET state = $2 WHERE id = $1", created.ID, test.state); err != nil {
+				t.Fatal(err)
+			}
+			lease := jobs.Lease{JobID: created.ID, Token: strings.Repeat("ab", 32)}
+			if err := repository.Heartbeat(ctx, lease, time.Minute); err == nil || !strings.Contains(err.Error(), "corrupt stored state") {
+				t.Fatalf("Heartbeat(%s state) = %v", test.name, err)
+			}
+			if counts, err := repository.Counts(ctx, "corrupt-state"); err == nil || counts != (jobs.Counts{}) || !strings.Contains(err.Error(), "corrupt stored state") {
+				t.Fatalf("Counts(%s state) = (%+v, %v)", test.name, counts, err)
+			}
+		})
+	}
+}
+
+func TestPostgreSQLLeaseStateAllocationAcrossDefaultQueryModes(t *testing.T) {
+	modes := []struct {
+		name string
+		mode pgx.QueryExecMode
+	}{
+		{name: "cache statement", mode: pgx.QueryExecModeCacheStatement},
+		{name: "cache describe", mode: pgx.QueryExecModeCacheDescribe},
+		{name: "describe exec", mode: pgx.QueryExecModeDescribeExec},
+		{name: "exec", mode: pgx.QueryExecModeExec},
+		{name: "simple protocol", mode: pgx.QueryExecModeSimpleProtocol},
+	}
+	results := make(map[string]int64, len(modes))
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			pool, repository := integrationRepositoryWithMode(t, mode.mode)
+			ctx := context.Background()
+			created, wasCreated, err := repository.Enqueue(ctx, jobs.EnqueueRequest{
+				Queue: "state-mode", Kind: "lease", MaxAttempts: 1,
+			})
+			if err != nil || !wasCreated {
+				t.Fatalf("Enqueue() = (%+v, %t, %v)", created, wasCreated, err)
+			}
+			dropStoredStateGuards(t, pool, false)
+			oversized := []byte(strings.Repeat("x", jobs.MaxPayloadBytes+1))
+			if _, err := pool.Exec(ctx, "UPDATE public.gotth_jobs SET state = convert_from($2, 'UTF8') WHERE id = $1", created.ID, oversized); err != nil {
+				t.Fatal(err)
+			}
+			lease := jobs.Lease{JobID: created.ID, Token: strings.Repeat("ab", 32)}
+			var heartbeatErr error
+			result := testing.Benchmark(func(b *testing.B) {
+				b.ReportAllocs()
+				for range b.N {
+					heartbeatErr = repository.Heartbeat(ctx, lease, time.Minute)
+				}
+			})
+			allocated := result.AllocedBytesPerOp()
+			results[mode.name] = allocated
+			t.Logf("mode=%s oversized_state=%d_bytes/op", mode.name, allocated)
+			if heartbeatErr == nil || !strings.Contains(heartbeatErr.Error(), "corrupt stored state") {
+				t.Fatalf("Heartbeat(oversized state) = %v", heartbeatErr)
+			}
+			if allocated >= int64(len(oversized)) {
+				t.Fatalf("oversized state rejection allocated %d bytes/op for %d-byte source", allocated, len(oversized))
+			}
+		})
+	}
+	baseline := results["cache statement"]
+	for name, allocated := range results {
+		if allocated > baseline+jobs.MaxPayloadBytes/2 {
+			t.Errorf("mode %s adds a source-sized state allocation: baseline=%d mode=%d", name, baseline, allocated)
+		}
 	}
 }
 

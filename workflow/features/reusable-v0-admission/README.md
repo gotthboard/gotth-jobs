@@ -68,4 +68,7 @@ repair at exact source `27bbaa9` gives unknown outcome immediate precedence for
 Claim, Complete, and Fail, retaining typed reconciliation identity when a
 handle exists and never polling or continuing. Exact-source race, repeat, and
 coverage evidence is retained, and the prior bundle path is corrected to
-`389915b/source.bundle`. Fresh final reviews remain orchestrator-owned.
+`389915b/source.bundle`. Two fresh independent reviews of exact final candidate
+`a0704520b0039b27016031c88305a0bd641cc174` returned CLEAN. The feature is
+technically admitted and `workflow.toml` records it as `done`; release and a
+real-consumer dependency pin remain separate gates.

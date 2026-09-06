@@ -28,8 +28,9 @@ Current Judge 12 repair verification:
 - Literal commands, cwd, toolchain, `GOMAXPROCS`, package patterns, regexes,
   options, exact HEAD/tree, bundle hashes, and clean pre/post status are
   retained in the hashed runner and transcript.
-- Workflow remains active. Two fresh attributable independent reviews of the
-  final candidate remain orchestrator-owned; this worker claims no admission.
+- Two fresh attributable independent reviews of exact final candidate
+  `a0704520b0039b27016031c88305a0bd641cc174` returned CLEAN. The standalone
+  reusable-v0 implementation is technically admitted and remains unreleased.
 
 Complete hashes and scope are recorded in
 `workflow/features/reusable-v0-admission/evidence/verification.md`.

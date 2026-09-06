@@ -17,8 +17,10 @@ Current status: unreleased Go library with an unstable pre-1.0 API.
 
 ## Installation
 
-The future import path is `github.com/gotthboard/gotth-jobs/pkg/jobs`. No tag or
-compatibility promise exists yet; consumers must not pin it until admission.
+The import path is `github.com/gotthboard/gotth-jobs/pkg/jobs`. The standalone
+implementation is technically admitted, but no tag or compatibility promise
+exists yet. Product consumers may use an exact candidate pin for integration
+proof; they must not treat it as a released dependency until release admission.
 
 The repository pins Go 1.26.6 where a Go module exists. Supported protocol,
 runtime, database, and tool versions remain the ones stated in the README and

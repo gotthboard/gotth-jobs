@@ -6,6 +6,34 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 10:58 CDT - Admit reusable v0
+
+Commit: current commit; hash assigned by Git after commit
+
+Affected files:
+
+- admission status and distribution documentation
+- workflow completion event
+- independent review 15 and 16 records
+
+Explanation:
+
+Admit the reusable PostgreSQL job implementation after two fresh independent
+reviews returned CLEAN at exact candidate
+`a0704520b0039b27016031c88305a0bd641cc174`.
+
+Verification:
+
+- independent review 15: CLEAN, SHA-256
+  `34ef22f7e5c5ac279ea5f4a533c94cdb139c3d85ac2f139511ac0f3e46ca9a45`
+- independent review 16: CLEAN, SHA-256
+  `c1fee9801b79e97f57bbac86266780c856fbc120dd0951e0b366e4ccabcd0387`
+
+Risks / non-goals:
+
+- Technical admission does not create a tag, release, deployment, or
+  compatibility promise. Real-consumer pin and release gates remain open.
+
 ### 2026-09-06 10:14 CDT - Prioritize unknown Worker outcomes
 
 Implementation source: `27bbaa962e1d7d65e2395a5bb212e92ea6e6d667`

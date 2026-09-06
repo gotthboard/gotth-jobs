@@ -169,3 +169,18 @@ query and the count query changed:
 | 100-row locked prefix | 1 | 27.105679 ms | N/A | N/A | N/A |
 
 No optimization, latency guarantee, or speedup is claimed.
+
+The Judge 9 repair affects only failed-handler text preparation. Against exact
+source `b54c0fc`, a preallocated 1 MiB valid string allocated 4,096 bytes in
+`boundedFailure`, alternating invalid UTF-8 allocated 29,952 bytes, and NUL
+input allocated 12,288-12,320 bytes across 20 recorded runs. The rejected
+implementation allocated 8,736,880 bytes for the invalid input and 2,101,280
+bytes for the NUL input. A 100-repeat focused test process completed in 1.94s
+real time on `development`; this includes fixture setup, forced garbage
+collections, test runtime, and compilation and is not a function latency
+benchmark.
+
+The PostgreSQL performance matrix was not rerun: every canonical workload has
+a successful handler, while this repair changes only local processing after a
+handler returns an error. No SQL, Store call, successful Worker path, or public
+API changed. No speedup or latency guarantee is claimed.

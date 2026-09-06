@@ -6,6 +6,46 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 08:25 CDT - Bound Worker failure normalization
+
+Implementation source: `b54c0fcabb5f7f43e3268749f75a59fbfd27413d`
+
+Affected files:
+
+- Worker failure-message preparation and complexity comments
+- focused output/allocation regression
+- runtime, performance, verification, coverage, and workflow evidence
+
+Explanation:
+
+Worker now calls a handler error's `Error()` method once and caps its returned
+source before UTF-8 normalization or NUL redaction. Normalization operates on
+only a `MaxFailureBytes`-scale prefix, truncation reserves the ellipsis within
+the final limit, and invalid UTF-8 expansion cannot make library work or
+allocation depend on the complete source length. Final failure text remains at
+most 4 KiB, valid UTF-8, NUL-free, redacted, and explicitly truncated.
+
+Verification:
+
+- expected-red 1 MiB valid, alternating-invalid, and NUL allocation regression
+- constrained local focused repeats, full package, vet, format, and integration
+  compilation
+- exact clean-source format, vet, unit, build, full race, 50 focused race
+  repeats, 20 allocation runs, 100-repeat focused timing, bounded-failure fuzz,
+  and 97.5% statement coverage on `development`
+- exact-source Graphify extraction/diagnosis; `boundedFailure` is 100% covered
+
+Risks / non-goals:
+
+- Work performed inside a consumer-defined `Error()` method remains
+  consumer-owned; the library bound begins after that single call returns.
+- PostgreSQL, external-consumer, and PostgreSQL performance gates were not
+  rerun because no SQL, Store contract, public API, or successful Worker path
+  changed. Existing evidence remains ancestor evidence only.
+- Two fresh independent reviews remain orchestrator-owned. This repair does
+  not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 07:23 CDT - Reject malformed scalar job states
 
 Implementation source: `4ec1970ed632f0306cc772bceeae8e15e17f5ab6`

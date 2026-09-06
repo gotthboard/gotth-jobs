@@ -29,6 +29,13 @@ lease. That reserves scheduler and database round-trip margin before expiry;
 it cannot guarantee renewal across arbitrary process, host, or database
 pauses.
 
+Worker calls a handler error's `Error()` method once. It caps that returned
+source to a 4 KiB-scale prefix before UTF-8 normalization or NUL redaction,
+reserves room for an ellipsis when truncating, and sends at most
+`MaxFailureBytes` of valid, NUL-free UTF-8 to `Fail`. Work performed inside a
+custom `Error()` method is consumer-owned; Worker work after it returns is
+independent of the full error length.
+
 ## Boundary
 
 The first durable backend is PostgreSQL 17 using `FOR UPDATE SKIP LOCKED`, which

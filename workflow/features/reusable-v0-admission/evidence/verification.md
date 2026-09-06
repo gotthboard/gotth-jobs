@@ -3,171 +3,147 @@
 ## Identity and disposition
 
 - Baseline: `874212b762571cd88322867872e458af0d9e0435`.
-- Judge-8-rejected candidate:
-  `2486b4732076976d4565e235de1d97c36b361951`.
-- Independent report: `/tmp/gotth-jobs-independent-judge-8.md`.
+- Judge-9-rejected candidate:
+  `8213b6d8a14cd95545d95d2119d1bd5bd231c9e5`.
+- Independent report: `/tmp/gotth-jobs-independent-judge-9.md`.
 - Exact implementation repair source:
-  `4ec1970ed632f0306cc772bceeae8e15e17f5ab6`.
-- Source tree: `ea2427f5410f3a438ac29dd3df4f8ddef42ac4e1`.
+  `b54c0fcabb5f7f43e3268749f75a59fbfd27413d`.
+- Source tree: `1159e048b57ce06eb23bc55d2d987deadaa94f4d`.
 - Source bundle SHA-256:
-  `5617fb4970e26702829fbf058527db0fbe0d06cc47af4781558da0ab081c7379`.
+  `e93e80b32f4a22e56b8e281d205f2cdf798278c849a899805299e86e0fee173d`.
 - Branch: `feature/reusable-v0-admission` in the assigned isolated worktree.
 - State: active. This repair worker does not claim independent final
   admission.
 - No tag, push, merge, release, pull request, deployment, remote change, live
   database, or external consumer was changed.
 
-Judge 8 found two implementation defects and one evidence defect. The scalar
-state read after a rejected lease mutation scanned directly into `*string`,
-allowing a source-sized allocation and treating unknown state as
-`ErrLeaseLost`. `Counts` summed five filtered buckets without proving they
-covered every row. Prior evidence prose used placeholders and did not retain a
-literal command transcript or the external-consumer source. Historical reviews
-do not admit this source; two fresh orchestrator-owned reviews remain required.
+Judge 9 found one implementation defect. `boundedFailure` called
+`strings.ToValidUTF8` and `strings.ReplaceAll` over the complete unbounded
+handler error string before truncation. Invalid UTF-8 and NUL input therefore
+caused source-sized or larger library allocation and complete-source scanning.
+The report found no additional material defect. Historical reviews do not
+admit this repair; two fresh orchestrator-owned reviews remain required.
 
 ## Repair and contract
 
-`classifyLease` now scans non-NULL state through `boundedTextScanner` with a
-maximum equal to the longest allowed state before one bounded ownership
-conversion. It explicitly recognizes `pending`, `running`, `succeeded`,
-`dead`, and `canceled`. NULL, oversized, and unknown states return a
-stored-data corruption/storage error and never an ordinary lease outcome.
+`boundedFailure` calls `err.Error()` exactly once. After that delegated call
+returns, it selects at most a `MaxFailureBytes`-scale byte prefix before any
+normalization. A source known to exceed the final limit is capped with the
+three-byte ellipsis already reserved. Only that bounded prefix reaches
+`strings.ToValidUTF8` and NUL replacement.
 
-`Counts` now selects the five known-state conditional counts and `count(*)` in
-one query. It returns no observation when the total differs from the sum of the
-known buckets. This catches both unknown and NULL state even if database
-constraints have been damaged or bypassed.
+If invalid UTF-8 or NUL replacement expands a within-limit source, output is
+UTF-8-boundary-truncated with the same reserved ellipsis. The result remains no
+larger than `MaxFailureBytes`, valid UTF-8, NUL-free, and uses U+FFFD for both
+invalid input and NUL redaction. Library time after `Error()` is
+Theta(1+min(n, MaxFailureBytes)); worst-case auxiliary allocation is
+O(MaxFailureBytes), independent of the full source length. Work performed
+inside a custom consumer `Error()` method is outside the library bound.
 
-The public API, sentinel set, fencing, transaction ownership, and at-least-once
-delivery contract are unchanged. Existing stored-row corruption is reported as
-a storage error, so this repair does not introduce an inconsistent new public
-error identity.
-
-The adjacent scan audit found no other job-state scalar read. Job-returning
-queries already route all state fields through the bounded row scanner.
+The public API, Store contract, PostgreSQL behavior, fencing, retries, and
+at-least-once delivery contract are unchanged.
 
 ## Expected-red evidence
 
-The tests were written before production changes. Focused local tests against
-the rejected source failed because the destination was direct `*string`,
-oversized and unknown state became `ErrLeaseLost`, NULL did not produce the
-required classified corruption result, and the old five-column count fixture
-could not prove completeness.
+The allocation test was added before production changes and used preallocated
+1 MiB valid, alternating-invalid, and NUL-containing strings. It also asserts
+one `Error()` call, final byte limit, valid UTF-8, no NUL, replacement-rune
+redaction, and ellipsis behavior.
 
-Retained real-pgx expected-red source was the exact rejected candidate with
-only the hashed test patch applied:
-
-```text
-/home/linus/.cache/openclaw-code-index/gotth-jobs/judge8-red3-2486b47
-```
+Against rejected candidate `8213b6d` with only the retained test patch, the
+valid control passed while invalid UTF-8 allocated 8,736,880 bytes and NUL
+input allocated 2,101,280 bytes. The focused test failed exactly those two
+allocation checks.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `artifacts/tests.patch` | `3842b8160e32519f566d445ea5ccfa92f05fec5f4b2a51da9cf60bba3fa5ae52` |
-| `artifacts/expected-red-allocation.log` | `6acc99e9c22c55d4c126164051726de283cc5276d9e4a69bbcacb6decaad652c` |
-
-The real driver returned `ErrLeaseLost` for a rejected 1 MiB state while
-allocating 1,596,030-1,680,034 bytes/op across CacheStatement,
-CacheDescribe, DescribeExec, Exec, and SimpleProtocol. That is the defect the
-green allocation test distinguishes.
+| `expected-red-tests.patch` | `28351cdf9189859a7db7c41593c8784695fd5e2a6130eb62d7a833f23550fbf5` |
+| `expected-red-allocation.log` | `e37b2fa858eff27f85ec4b3d93e78868575d5dda01a532c7bb9eb39826f26f34` |
 
 ## Local checks
 
-Agenthost work was limited to focused package checks with `GOMAXPROCS=2` and
-`go test -p=1`. The new and adjacent tests passed for ten repeats, the whole
-package passed once, integration-tag compilation passed, vet and formatting
-passed, and `git diff --check` passed. CPU-heavy suites ran only on
-`development`.
+Agenthost work remained lightweight. Focused output/allocation tests passed for
+ten repeats, the complete package passed once, integration-tag compilation
+passed without running integration, and vet, formatting, and
+`git diff --check` passed. Go commands used `GOMAXPROCS=2` and
+`go test -p=1`.
 
 ## Exact-source development record
 
 The complete source bundle was cloned detached at:
 
-```text
-/home/linus/.cache/openclaw-code-index/gotth-jobs/4ec1970/source
-```
+`/home/linus/.cache/openclaw-code-index/gotth-jobs/b54c0fc/source`
 
-The retained runner enables `set -x` after redirecting both output streams to
-the transcript. Together they record the literal commands, cwd transitions,
-Go and host toolchains, relevant integration environment, source bundle hash,
-exact HEAD/tree, pre/post status, packages, regexes, tags, options, counts,
-container identity, database identity, and external-consumer invocation. This
-document intentionally does not reconstruct those commands from memory.
+The retained successful runner writes both streams directly to its transcript
+and enables `set -x`. It records literal commands, cwd, Go 1.26.6 and host
+toolchains, source bundle hash, exact HEAD/tree, clean pre/post status,
+packages, regexes, options, counts, timing, and an explicit completion
+sentinel. This document intentionally does not reconstruct those commands.
 
-The transcript records successful format, vet, unit, build, full race, 50
-focused race repeats, unit coverage, both 10-second fuzz targets, PostgreSQL
-full race and coverage, three five-mode malformed/allocation runs, ten
-race-instrumented focused repeats, the complete performance matrix, and the
-external-consumer test/build. The disposable container was removed. Source
-status was empty before and after all gates.
+Exact source passed format, vet, unit, build, full race, 50 focused race
+repeats, 20 verbose allocation runs, a 100-repeat Bash-timed focused workload,
+unit coverage, and the 10-second bounded-failure fuzz target. The 100-repeat
+test process took 1.94s real, 3.48s user, and 1.45s system; it includes
+compilation, fixture construction, forced garbage collection, and test
+overhead, so it is not claimed as function latency.
 
-Unit and integration statement coverage are both 97.4%. `classifyLease`,
-`Counts`, both borrowed-byte scanner methods, every shared job scanner and row
-validator are 100% covered. Exact residual blocks are in
-`coverage-gaps.log`; they are unrelated preexisting entropy/input/error paths.
-No changed production path is uncovered.
+The 20-run allocation samples were stable:
 
-## PostgreSQL and allocation
+| Preallocated source | Source bytes | Library bytes allocated | Result bytes |
+| --- | ---: | ---: | ---: |
+| valid ASCII | 1,048,576 | 4,096 | 4,096 |
+| alternating invalid UTF-8 / ASCII | 1,048,576 | 29,952 | 4,095 |
+| ASCII / NUL | 1,048,576 | 12,288-12,320 | 4,096 |
 
-PostgreSQL 17.10 used the pinned image:
+Unit statement coverage is 97.5%, and `boundedFailure` is 100% covered. Exact
+unrelated residual blocks are retained in `coverage-gaps.log`; there is no
+changed-path gap.
 
-```text
-postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
-```
+The first runner invocation failed before any verification gate because the
+host does not provide `/usr/bin/time`. Its runner and transcript are retained.
+The corrected runner used Bash `time -p` and completed every stated gate.
 
-Before any DDL, the runner recorded the explicit destructive-test opt-in and
-queried the server for exact database name `gotth_jobs_test` plus exact comment
-`gotth-jobs:dedicated-destructive-integration-test-v1`.
+## Proportional gate scope
 
-Malformed unknown and NULL state failed both lease classification and counts.
-Across three uninstrumented runs, a rejected 1 MiB state used 5,963-39,351
-bytes/op across all five supported modes. Ten race-instrumented repeats used
-408,174-747,438 bytes/op, below the source size. These measurements include
-driver, protocol, network, transaction, and race-runtime storage; the supported
-claim is only that the bounded scanner does not make a library-owned
-source-sized state string.
+No PostgreSQL test was run. The repair modifies one private, local helper after
+a handler failure and changes no SQL, database transaction, Store method,
+public API, or successful Worker path. The canonical PostgreSQL correctness and
+performance workloads do not exercise handler failure normalization; rerunning
+them would not validate this defect.
 
-The exact-source performance matrix is recorded in `docs/performance.md`. No
-optimization or latency guarantee is claimed.
+The standalone external-consumer fixture was not rerun because no public
+contract changed. Prior PostgreSQL and consumer results remain ancestor
+evidence only and are not rebound to `b54c0fc`.
 
-## External consumer
-
-The standalone module is retained outside the repository at:
-
-```text
-/home/linus/.cache/openclaw-code-index/gotth-jobs/4ec1970/external-consumer
-```
-
-Its `go.mod` SHA-256 is
-`2690f8fa37347d5e3e3b126dc160b6f938613f1e99add6f538998daffc22db7b` and
-its `go.sum` SHA-256 is
-`10f85f016b4bb4919ddc6453cc8c09962bc186a29d39ed064332a23ed5a58115`,
-and its `main_test.go` SHA-256 is
-`a8e24085aaab58f0454b8405ce0ba013f7aa3c448a750170dff82eb69c932e45`.
-The exact replacement path and literal test/build invocation are in the
-retained transcript; both passed.
+Exact-source Graphify 0.9.32 code-only extraction reported 316 nodes, 835
+edges, and 17 communities. Diagnostics reported zero unverified nodes,
+non-object edges, missing/dangling endpoints, self-loops, exact duplicates, or
+same-endpoint groups. The optional SQL parser was unavailable; no SQL graph
+coverage is claimed.
 
 ## Artifact inventory
 
 Artifact root:
 
-```text
-/home/linus/.cache/openclaw-code-index/gotth-jobs/4ec1970/artifacts
-```
+`/home/linus/.cache/openclaw-code-index/gotth-jobs/b54c0fc/artifacts`
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `artifact-inventory.sha256` | `a0374719ee2b9163ca807a6366506590a413012d2ebfc1775a3965f4a0f198a0` |
-| `run-verification.sh` | `4394a90a43486bcb64f459d02cf53fc290fec472e7409a503f53ecc1645e87fe` |
-| `verification-transcript.log` | `23b15454b76a90e88e42952ea04f628619c50d2efa309585bd1527926e3e397d` |
-| `coverage.out` | `79a11e92729d3261dc9fa2832e1c6f09721586fe6e8227e61d4ea52de4789d56` |
-| `coverage-functions.log` | `dbac3e68bd9a0a36b9bcdb452100fe2d036141400245c6712b84d553c0db402d` |
-| `coverage-gaps.log` | `69014389db8da5fda8342bea7e9541a1b5fea694ab2e65b7facf372f8281129c` |
-| `integration-coverage.out` | `79a11e92729d3261dc9fa2832e1c6f09721586fe6e8227e61d4ea52de4789d56` |
-| `integration-coverage-functions.log` | `dbac3e68bd9a0a36b9bcdb452100fe2d036141400245c6712b84d553c0db402d` |
-| `postgresql-image.json` | `557203fa8ddb39ed2b8ad084c0ec9a040498828e9f7cb1b344ba43b98844d374` |
-| `external-consumer-source.sha256` | `bdbc1d49cbd87ac3d15b770bec67d4cfde7a40abe98c37dbd38e1248bc15de2f` |
-| `source.bundle` | `5617fb4970e26702829fbf058527db0fbe0d06cc47af4781558da0ab081c7379` |
+| `artifact-inventory.sha256` | `24f10937efae782af13f2c0473bb74dd9743446a18a01f1edf0605df9b084cc6` |
+| `expected-red-tests.patch` | `28351cdf9189859a7db7c41593c8784695fd5e2a6130eb62d7a833f23550fbf5` |
+| `expected-red-allocation.log` | `e37b2fa858eff27f85ec4b3d93e78868575d5dda01a532c7bb9eb39826f26f34` |
+| `run-verification.sh` | `a1cc08f116e75f0df63cb36ecf48f48355dd99db5e6326eb54d6e80df9a20c2a` |
+| `verification-transcript.log` | `2bf429cfd652172c8f5d1c44f88294af3cc1e4f8430060823050718d0c950056` |
+| `coverage.out` | `4d0361bb9a1a84f6e3bec6073ed77c0441dbeca21c97a4832265a6b657ae62bb` |
+| `coverage-functions.log` | `98d5b2568a589730eb060d3040b92053de2ffb9ff4e2a33d04912986b06dd978` |
+| `coverage-gaps.log` | `5da31787a31ba378672bbc875bb402771f1e369891d20243eeb38d68334bcd05` |
+| `run-verification.failed.sh` | `4b27d0d8e15cfebe9e6d9c6bbeb2965312cfc9bd9be60a8f2c907f0ec335f850` |
+| `verification-transcript.failed.log` | `7daeeed1dd4a9615f7f4b3d4df75befd2b78edab34752ccf23fbde69a69ccd65` |
+| `run-graph-verification.sh` | `bc639bcacc31127a82581635d69bafef51f6fe71c160234d703e715ed82c2dbb` |
+| `graph-verification-transcript.log` | `95f9905cbb44dbcf4c1a1336a61a832d04f5e508e12ae0177a7fa88725190588` |
+| `graph/graphify-out/graph.json` | `8dc8f55e0645dbae1afbf97ed09e54723f5a7464be1e1afee23f3431d633b465` |
+| `graph-diagnose.json` | `b06b596182bb2a635b438ff83e5dabba5b4daea6aa7dc50c2aa0196acedade5f` |
+| `source.bundle` | `e93e80b32f4a22e56b8e281d205f2cdf798278c849a899805299e86e0fee173d` |
 
 ## Remaining gate
 

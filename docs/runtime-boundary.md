@@ -118,6 +118,14 @@ scheduler, and database round-trip margin. Arbitrary pauses can still consume
 that margin, so the bound is not a hard renewal guarantee. The library changes
 no session-scoped setting, so pooled-state restoration tests are N/A.
 
+Handler error text is an untrusted resource boundary. Worker invokes
+`Error()` once, then examines and normalizes at most a `MaxFailureBytes`-scale
+source prefix. Invalid UTF-8 and NUL become U+FFFD, truncation reserves the
+three-byte ellipsis, and the final message is valid NUL-free UTF-8 no larger
+than `MaxFailureBytes`. The consumer controls any cost incurred inside
+`Error()`; all subsequent library work and allocation are bounded independently
+of the full returned string.
+
 Integration schema reset is separately guarded from connection selection. It
 requires the exact opt-in
 `GOTTH_JOBS_ALLOW_DESTRUCTIVE_TEST_DATABASE_RESET=true`, then asks PostgreSQL

@@ -43,7 +43,9 @@ reaching pgx.
 - `Worker.Run`: serial claim/handle/heartbeat/acknowledgement loop that cancels
   and joins the per-attempt heartbeat after handler return. A nonzero
   commit-unknown Claim becomes `ClaimReconciliationError`; the handler does not
-  run and `ReconciliationJob` is not execution authorization.
+  run and `ReconciliationJob` is not execution authorization. Handler failure
+  text is obtained once, source-capped before normalization, sanitized to
+  valid NUL-free UTF-8, and ellipsis-truncated within `MaxFailureBytes`.
 - `Permanent`: mark a handler error as non-retryable without changing it for
   `errors.Is`/`errors.As` traversal.
 

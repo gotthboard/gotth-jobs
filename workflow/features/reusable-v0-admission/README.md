@@ -43,3 +43,12 @@ borrowed-state scanning, exact five-state classification, count completeness,
 malformed PostgreSQL/allocation tests, and a hashed exact-source `set -x`
 transcript plus retained consumer source. Admission remains active pending two
 fresh orchestrator-owned reviews of the final candidate.
+
+The ninth independent review rejected candidate `8213b6d` because Worker
+normalized and redacted the complete handler error string before enforcing its
+4 KiB persistence limit. The repair at exact source `b54c0fc` calls `Error()`
+once, caps the source first, bounds invalid UTF-8/NUL expansion, and reserves
+the ellipsis within the final limit. Expected-red and exact-source allocation,
+race, coverage, fuzz, focused performance, and graph evidence are retained;
+PostgreSQL was not rerun because no database path changed. Fresh final reviews
+remain orchestrator-owned.

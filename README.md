@@ -3,6 +3,11 @@
 `gotth-jobs` is a PostgreSQL-backed durable background-job library for Go. Its
 public package lives at `pkg/jobs`; the module root contains no Go package.
 
+> **Distribution:** GitHub is the public clone and future release endpoint.
+> Forgejo remains canonical development. Report public bugs through GitHub
+> Issues and security vulnerabilities through GitHub private reporting.
+> See [the distribution contract](docs/distribution.md).
+
 The library owns bounded job envelopes, idempotent enqueue, deterministic
 claim order, expiring leases, opaque fencing tokens, heartbeats, cooperative
 cancellation, bounded retry scheduling, dead-letter inspection and redrive,
@@ -119,7 +124,7 @@ pins its first compatibility contract. No tag currently exists.
 
 ## Development and distribution
 
-- Canonical development: <https://git.dannyhunn.com/agents/gotth-jobs>
+- Canonical development: <https://git.dannyhunn.com/gotthboard/gotth-jobs>
 - Public Go import and future releases: <https://github.com/gotthboard/gotth-jobs>
 
 Forgejo remains authoritative and mirrors one way to GitHub. See

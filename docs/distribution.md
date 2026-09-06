@@ -2,10 +2,14 @@
 
 ## Endpoints
 
-- Canonical development and change tracking:
-  <https://git.dannyhunn.com/agents/gotth-jobs>
-- Public clone and, after implementation and consumer admission, releases:
+- Canonical development source:
+  <https://git.dannyhunn.com/gotthboard/gotth-jobs>
+- Public clone and, after consumer and release admission, releases:
   <https://github.com/gotthboard/gotth-jobs>
+- Public bug tracker:
+  <https://github.com/gotthboard/gotth-jobs/issues>
+- Private vulnerability reports:
+  <https://github.com/gotthboard/gotth-jobs/security/advisories/new>
 
 Forgejo pushes one way to GitHub. GitHub does not feed commits or tags back to
 Forgejo. A ref is distributed only when the exact object ID is visible at both

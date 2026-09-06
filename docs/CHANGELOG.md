@@ -502,6 +502,34 @@ Risks / non-goals:
 - No tag, consumer pin, remote push, merge, release, pull request, live
   database, or deployment changes.
 
+### 2026-09-06 00:54 CDT — Route vulnerability reports through GitHub
+
+Commit: `9de69960caf81ea7ec0b262fce834dc96101ea5c`
+
+Affected files:
+
+- `README.md`
+- `CONTRIBUTING.md`
+- `SECURITY.md`
+- `docs/distribution.md`
+- `docs/CHANGELOG.md`
+
+Explanation:
+
+Keep Forgejo as the canonical development source while routing public bugs to
+GitHub Issues and confidential vulnerability reports to GitHub private
+security advisories. Remove the obsolete private Forgejo reporting path and
+the retired `agents/` namespace.
+
+Verification:
+
+- documentation whitespace and stale-policy scans
+- direct GitHub API confirmation that private vulnerability reporting is enabled
+
+Risks / non-goals:
+
+- no source code, public API, tag, release, deployment, or compatibility promise changed
+
 ### 2026-09-06 00:51 CDT — Enforce PostgreSQL time and attempt boundaries
 
 Commit: `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`

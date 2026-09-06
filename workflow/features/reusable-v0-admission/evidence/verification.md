@@ -3,90 +3,81 @@
 ## Identity and disposition
 
 - Baseline: `874212b762571cd88322867872e458af0d9e0435`.
-- Audit-rejected candidate: `c64368a202f4af62c33a8640ac0d0923df2e333e`.
-- Admission audit: `/tmp/gotth-jobs-admission-audit.md`.
-- First repair source: `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`.
-- First-review-rejected candidate:
-  `671a1eac9ddc6d273136d46de6d906730c7182e5`.
-- First independent review: `/tmp/gotth-jobs-independent-judge-1.md`.
-- Cursor repair source:
-  `9f6acc74f8901a58a3a9929d10ad7a3779241f4d`.
-- Second-review-rejected candidate:
-  `68e2f24b2f20b0c3905d46e9a228d28f044ca9a4`.
-- Second independent review: `/tmp/gotth-jobs-independent-judge-2.md`.
-- Runtime-contract repair source:
-  `b54cd4f3c385cbe0df1158c2a866efe7fbc216d1`.
-- Third-review-rejected candidate:
-  `b195469add429001a35b3c9658ecfd52e07c08e3`.
-- Third independent review: `/tmp/gotth-jobs-independent-judge-3.md`.
-- Claim/heartbeat repair source:
-  `6655331ae4e3b7509b826a03db11c36cee9a6ca2`.
-- Fourth-review-rejected candidate:
-  `258aeba1bc43ec39cb21ec93bf6698948854e6dc`.
-- Fourth independent review: `/tmp/gotth-jobs-independent-judge-4.md`.
-- Current implementation repair source:
-  `62d565aa1d3f4ebf19cc4d39bf87d2764c676c8b`.
+- Judge-5-rejected candidate:
+  `6984227d9e1bc9247a6bc783627dfeabd5c2dc42`.
+- Independent report: `/tmp/gotth-jobs-independent-judge-5.md`.
+- Exact implementation repair source:
+  `53cf140090cb7c1bc2076579437aab8edd3a0229`.
 - Branch: `feature/reusable-v0-admission` in the assigned isolated worktree.
-- State: active. This repair worker does not claim independent final admission.
+- State: active. This repair worker does not claim independent final
+  admission.
 - No tag, Git remote configuration, push, merge, release, pull request,
   deployment, live database, secret, or consumer was changed.
 
-The fourth review found three remaining defects: two Read Committed snapshots
-could authenticate old idempotency row A and return replacement B; enqueue
-copied an arbitrarily oversized payload and opened a transaction before
-rejecting it; and `Worker.Run` erased a nonzero commit-unknown Claim result.
-All three are repaired. Historical reviews do not admit the current tree; two
-fresh attributable orchestrator-owned reviews of the final candidate remain
-required.
+Judge 5 found three defects: Heartbeat returned and Worker discarded a full
+Job payload on every tick; the partial queue/key unique index did not make key
+changes conflict with `FOR KEY SHARE`; and `scanJobRow` copied bytea before
+checking its size, then copied valid payloads again. Historical clean reviews
+do not admit this source. Two fresh attributable orchestrator-owned reviews
+remain required.
 
-## Contracts checked
+## Contracts and adjacent audit
 
-The worker read the full admission audit, all four independent review reports,
-PRD, architecture, implementation specification, runtime boundary, workflow
-manifest, records, prior evidence, transaction wrappers, enqueue scanners,
-Worker error flow, PostgreSQL 17 Read Committed and row-lock contracts, and pgx
-transaction behavior before repair.
+The worker read the complete Judge 5 report, PRD, architecture, implementation
+specification, runtime boundary, workflow state and evidence, PostgreSQL
+integration/performance tests, and every job scan and Heartbeat caller.
 
-At Read Committed, separate commands receive separate snapshots. The fixed
-idempotency fallback therefore selects `request_fingerprint` and every public
-job column from one row in one command. `FOR KEY SHARE` retains that row's key
-identity until transaction end: delete and key-changing updates wait, while
-ordinary state-only updates remain compatible. The returned Job is exactly the
-one scanned beside the compared fingerprint.
+Pinned pgx 5.10 source was inspected directly. `pgtype.BytesScanner` receives
+driver memory valid only until the next database method call. `ByteaCodec`
+prefers binary format; its binary scanner plan calls `ScanBytes(src)` directly,
+while the old `*[]byte` plan allocates and copies. The new scanner therefore
+checks `len(src)` first and makes one owning copy only for an accepted payload.
+All public Job-returning SQL paths share `scanJobRow`; no analogous payload
+post-clone remains. The only separate byte slice scan is the fixed 32-byte
+idempotency fingerprint.
 
-Every transaction wrapper was inspected for analogous value loss. Enqueue
-returns its transaction result fields; Cancel, Redrive, and lease mutations
-return `transact`'s value/error pair directly; Claim already preserves its
-produced value. Only Worker had an additional value-erasing layer.
+PostgreSQL's non-partial unique `(queue, idempotency_key)` index makes queue/key
+updates key-changing row updates that conflict with `FOR KEY SHARE`. Default
+unique-index `NULL` semantics remain distinct, so unkeyed jobs are unaffected.
+Heartbeat is the only lifecycle value discarded by Worker; Complete and Fail
+return their transitioned Job to public callers and retain their payload cost.
 
 ## Repairs and regressions
 
-`prepareEnqueue` validates caller-controlled sizes before cloning. `Enqueue`
-checks context, prepares one bounded copy, and only then calls `BeginTx` and a
-private prepared helper. `EnqueueTx` prepares once and calls the same helper.
-For a `MaxPayloadBytes+1` fixture, the regression requires `ErrInvalid`, zero
-library-owned `BeginTx` calls, zero caller-transaction queries, and fewer than
-half the input bytes allocated during each measured call. It therefore detects
-the old proportional clone without requiring an unbounded fixture.
+Heartbeat's unreleased Store and PostgreSQL signatures now return `error`.
+The SQL returns one boolean and no `jobColumns`; rejected leases still use the
+same same-transaction state classifier. Worker and all fakes/public consumers
+use the error-only contract. Unit SQL-shape coverage rejects any heartbeat
+payload column. Real PostgreSQL benchmarking compares empty and 1 MiB jobs and
+requires the latter to allocate no more than 64 KiB/op above the former; three
+repeats passed.
 
-The deterministic unit interleaving models the old first fingerprint read of
-A, replacement, and second job read of B. It failed by returning B. The fixed
-path makes only one fallback statement, returns A from the same scan as its
-fingerprint, and asserts `FOR KEY SHARE`. A malformed combined row is also
-rejected through the shared untrusted-row validation boundary.
+The migration now defines a non-partial unique queue/key index and Enqueue's
+conflict target matches it. Migration text coverage rejects a partial
+predicate. PostgreSQL coverage enqueues two distinct rows with `NULL` keys.
+The deterministic key-update test obtains the idempotent fallback's key-share
+lock, starts a concurrent key-changing UPDATE, observes it waiting on a row
+lock, commits the fallback transaction, then completes the update and inserts
+replacement B. A subsequent request A must conflict with B.
 
-`ClaimReconciliationError` is exported but keeps its Job private. Its
-`ReconciliationJob` accessor exposes the exact unconfirmed ID/token only for
-durable reconciliation, `Unwrap` returns the original Claim error, and
-`Error()` is fixed text containing no job fields. `Worker.Run` returns this
-type for a nonzero commit-unknown Claim and does not invoke the handler.
+`boundedPayloadScanner` implements `pgtype.BytesScanner`. It rejects
+`MaxPayloadBytes+1` before payload-sized allocation, accepts exactly
+`MaxPayloadBytes`, owns the returned bytes independently of source mutation,
+and removes the post-scan clone. The valid regression measured about 2.10 MiB
+before repair and requires one payload-sized allocation after repair; the
+oversized regression measured about 2.11 MiB before repair and now requires
+less than half a payload of incidental allocation.
 
-Expected-red transcripts:
+Expected-red transcript:
 
-| Regression transcript | SHA-256 |
+| Artifact | SHA-256 |
 | --- | --- |
-| `/tmp/gotth-jobs-red-judge4-enqueue.log` | `4e1eeac31200646d0d2b0cd05a9795206d561ec2d441d3e850c16b40b8408a14` |
-| `/tmp/gotth-jobs-red-judge4-worker.log` | `e449b0ecd1e82bc1c44927f49e61211623fd88fc2e616384161158976da12647` |
+| `/tmp/gotth-jobs-red-judge5.log` | `2025d182ac8baaf169237ea35c838e195f96bea3ff6e68717b0d113cae7c6ec1` |
+
+The focused red command failed all four defect assertions before production
+changes. The PostgreSQL interleaving was added in the same tests-first phase
+and executed only on the designated development host after the migration fix;
+no local PostgreSQL gate was claimed.
 
 ## Local focused checks
 
@@ -94,52 +85,50 @@ The agent host used Go 1.26.6-X:nodwarf5 on Linux amd64. Only constrained,
 lightweight checks ran locally:
 
 ```text
-GOMAXPROCS=2 go test -p=1 ./pkg/jobs -run 'TestEnqueue(IdempotentFallbackCannotAuthenticateThenReturnReplacement|RejectsOversizedPayloadBeforeCopyOrBegin)$' -count=1
-GOMAXPROCS=2 go test -p=1 ./pkg/jobs -run '^TestWorkerRunPreservesUnknownClaimOutcomeForReconciliation$' -count=1
-GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '^(TestEnqueueIdempotentFallbackCannotAuthenticateThenReturnReplacement|TestEnqueueRejectsOversizedPayloadBeforeCopyOrBegin|TestScanJobWithFingerprintRejectsMalformedCombinedRow|TestWorkerRunPreservesUnknownClaimOutcomeForReconciliation)$' -count=10
+GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '<four defect regressions>' -count=1  # expected red
+GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '<four defect regressions>' -count=1
+GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '^(TestHeartbeat|TestScanJob|TestMigrationUsesNonPartialIdempotencyKeyIndex)' -count=10
 GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -count=1
-GOMAXPROCS=2 go vet -mod=readonly ./pkg/jobs/...
 GOMAXPROCS=2 go test -mod=readonly -p=1 -tags=integration ./pkg/jobs -run '^$' -count=1
+GOMAXPROCS=2 go vet -mod=readonly ./pkg/jobs/...
 ```
 
-The first two commands were captured failing before their corresponding
-production repairs. Post-repair focused, repeated, package, vet, compile,
-format, and `git diff --check` checks passed.
+All post-repair checks passed. Formatting and `git diff --check` passed.
 
 ## Exact clean-source development gates
 
-The repair source was transferred without a push in a Git bundle and cloned
+The source was transferred without a push in a complete Git bundle and cloned
 detached on `development` at:
 
 ```text
-/home/linus/.cache/openclaw-code-index/gotth-jobs/62d565aa1d3f4ebf19cc4d39bf87d2764c676c8b/source
+/home/linus/.cache/openclaw-code-index/gotth-jobs/53cf140090cb7c1bc2076579437aab8edd3a0229/source
 ```
 
-The bundle SHA-256 is
-`f839d6abde5b773787203597d22e88a16e2ba5111c5eecaab1339717d04476e7`.
+Bundle SHA-256:
+`f8005454b5a687bf5a43d3887cf41b0f89c2c1300d72cdd8237d585354d722c3`.
 The clone was clean before and after every gate and selected Go 1.26.6.
 
 Exact source passed:
 
 ```text
-gofmt tracked-file check
+tracked Go format check
 go vet -mod=readonly ./...
 go test -mod=readonly -count=1 ./...
 go build -mod=readonly ./...
 go test -mod=readonly -race -count=1 ./...
-go test -mod=readonly -race -count=50 -run=<eight affected/adjacent tests> ./pkg/jobs
+go test -mod=readonly -race -count=50 -run=<seven affected/adjacent tests> ./pkg/jobs
 go test -mod=readonly -count=1 -coverprofile=<artifact>/coverage.out ./...
+go test -mod=readonly -fuzz=<each target> -fuzztime=10s ./pkg/jobs
 ```
 
-Statement coverage is 96.9%. `Enqueue`, `EnqueueTx`, `prepareEnqueue`,
-`scanJob`, `scanJobWithFingerprint`, `scanJobRow`, and all three
-`ClaimReconciliationError` methods are 100% covered. The new Worker branch has
-nonzero counts. Exact zero-count ranges are in
-`affected-coverage-gaps.log`: enqueue entropy failure, preexisting terminal
-timestamp rejection, Worker nil/configuration/attempt error propagation, and
-retry-delay failure. No defect-specific statement remains uncovered.
+Statement coverage is 97.0%. Heartbeat, Complete, Fail, `leaseMutation`,
+`boundedPayloadScanner.ScanBytes`, `scanJob`, `scanJobWithFingerprint`, and
+`scanJobRow` are all 100% covered. The exact lower-coverage functions are in
+`affected-coverage-gaps.log`; they are preexisting entropy/error, migration
+panic, operation, stored terminal timestamp, Claim, and Worker branches. No
+changed function or defect-specific statement remains uncovered.
 
-## PostgreSQL 17 and performance
+## PostgreSQL 17, external consumer, and performance
 
 Integration used disposable PostgreSQL 17.10 at exactly:
 
@@ -152,59 +141,57 @@ Exact commands:
 ```text
 go test -mod=readonly -race -tags=integration -count=1 ./...
 go test -mod=readonly -tags=integration -count=1 -coverprofile=<artifact>/integration-coverage.out ./...
-go test -mod=readonly -race -tags=integration -run '^TestPostgreSQLEnqueueIdempotentFallbackRetainsAuthenticatedRow$' -count=10 -v ./pkg/jobs
+go test -mod=readonly -race -tags=integration -run '^TestPostgreSQLEnqueueIdempotentFallbackRetainsKeyUpdate$' -count=10 -v ./pkg/jobs
+go test -mod=readonly -tags=integration -run '^TestPostgreSQLHeartbeatAllocationIndependentOfPayload$' -count=3 -v ./pkg/jobs
 go test -mod=readonly -tags='integration performance' -run '^TestPostgreSQLPerformanceAdmission$' -count=1 -v ./pkg/jobs
 ```
 
-All passed. The retaining-row test observed the replacement `DELETE` waiting
-in `pg_stat_activity` with `wait_event_type='Lock'` until the caller-owned
-transaction committed, then inserted B and required request A to return
-`ErrIdempotencyConflict`. All 10 race-instrumented repeats passed. Integration
-coverage is 96.9%. The complete performance matrix passed; exact results are in
-`docs/performance.md` and no optimization claim is made. The disposable
-container was removed.
+All passed; integration statement coverage is 97.0%. Every key-changing UPDATE
+was observed waiting until transaction end. Heartbeat response shape is one
+boolean, and all three empty-versus-maximum allocation comparisons met the
+64 KiB independence threshold. The complete performance matrix is recorded in
+`docs/performance.md`. The disposable containers were removed.
 
-## External consumer and proportional scope
-
-A standalone module outside the repository compiled and ran against exact
-repair source. It used `errors.As` for `*jobs.ClaimReconciliationError`, checked
-`errors.Is` against the original joined error, recovered the exact ID/token,
-verified token-free error text, and proved the handler was not called:
+A standalone external module outside the repository was updated for
+`Heartbeat(...) error`, asserted `jobs.Store` compatibility, retained the Claim
+reconciliation test, and passed:
 
 ```text
 go test -mod=readonly -count=1 ./...
 go build -mod=readonly ./...
 ```
 
-The two fuzz targets and Graphify integrity gate were not invalidated by the
-SQL snapshot, allocation ordering, or additive error type and remain ancestor
-evidence at `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`. They were not
-represented as current-source results.
+Two PostgreSQL launcher attempts failed before test execution because direct
+Docker socket access was denied and then because an exported URL was scoped to
+a piped subshell. The valid run used the host's noninteractive `sudo docker`
+path and exported the URL in the parent shell. Failed setup logs were
+overwritten and are not represented as test passes.
 
-## Current artifact inventory
+## Artifact inventory
 
 Artifact root:
 
 ```text
-/home/linus/.cache/openclaw-code-index/gotth-jobs/62d565aa1d3f4ebf19cc4d39bf87d2764c676c8b/artifacts
+/home/linus/.cache/openclaw-code-index/gotth-jobs/53cf140090cb7c1bc2076579437aab8edd3a0229/artifacts
 ```
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `bundle-verify.log` | `305a146bcfb5c47f05cf36bd97442b3c7bc63e86d2f68c8999a53cd3d2f5b764` |
-| `clean-gates.log` | `2d185c12e401131e0aca63977c46a7a25a4550cb69e8f3bf9a2fbf6be5d0e6a0` |
-| `coverage.out` | `84f21c827b4f0e8757b41d19b8112a2e78c0a3e58baadf47135d4373faa162ab` |
-| `affected-coverage-gaps.log` | `124d5bafba72c525110fb57758747b36d19ad30411909a1008cb314c42a3a8cf` |
-| `integration.log` | `d221930d6e714d454cbac2cfdb01d10dd15e3f2eeffd3acdd38517b7c075f0d1` |
-| `integration-coverage.out` | `84f21c827b4f0e8757b41d19b8112a2e78c0a3e58baadf47135d4373faa162ab` |
-| `postgresql-image.json` | `557203fa8ddb39ed2b8ad084c0ec9a040498828e9f7cb1b344ba43b98844d374` |
-| `postgresql-repeat.log` | `ffb827171b351e904aacd4dfc213e0fba608c08f5bfa51a227f6d7c4162969fa` |
-| `performance.log` | `dbe24670baff242efc2440e2f187629d16b0aa6929799a0a71cdac33f5aa0ff9` |
-| `external-consumer.log` | `da8228ef3155f6ed5d893b27fe6a2dd30ae9bdd2e29f6e9d7fb1603edd558c51` |
+| `bundle-verify.log` | `3b80beb75fe0293692321181c611e2c59233823be7fd9d6341650d8ef18bdd9c` |
+| `clean-gates.log` | `ea7945c31ba1237acb17463c63caa6a91cce8370cb338e6189a967cb62ff134c` |
+| `coverage.out` | `2f3caffdb22cf93d02492132e92a3de54ecce15365d6125832e6657a05397aa7` |
+| `affected-coverage-gaps.log` | `f90bcbd19102002eeec504f0aa37e70fc8002f01ddf5f45d21535fe404846f28` |
+| `integration.log` | `6736b2ab82f74b79d2e466ca17f54e825f2004e232570ac60cd0ff1c5604402c` |
+| `integration-coverage.out` | `2f3caffdb22cf93d02492132e92a3de54ecce15365d6125832e6657a05397aa7` |
+| `postgresql-image.json` | `ea1f9a4b971fc46a7ddf85058899556ac0d523ed0bd9bf962bde7d0b12c5fa8b` |
+| `postgresql-repeat.log` | `e7d6b93eb8c32f2044027b861e8d7b89745ad19e0d06cf37b21e468feeb6dfe8` |
+| `performance.log` | `0e61cfcc03ff0afe63ef25679e0a87ff60f0c924c80c152bbe3d0fe2b61a6c9f` |
+| `external-consumer.log` | `a74e9aaf058b4e4f9baca424416d81eff08cc41ba499a5d382841216886c0a19` |
+| `fuzz.log` | `fc5af7d4b8ceb34816c34b38e81c7949e9f152e78ebae0848a06e25a7e0c0b38` |
 
 ## Remaining gate
 
-Affected implementation and exact-source evidence gates are complete for this
-repair. Final admission remains blocked on two attributable, fresh independent
-clean reviews pinned to the final candidate tree. Those reviews are
+Implementation and exact-source evidence gates are complete for this repair.
+Final admission remains active pending two fresh attributable independent
+reviews pinned to the final candidate tree. Those reviews are
 orchestrator-owned; this worker neither creates them nor claims a result.

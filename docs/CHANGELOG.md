@@ -6,6 +6,50 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 04:08 CDT — Bound heartbeat and row payload costs
+
+Commit: `53cf140090cb7c1bc2076579437aab8edd3a0229`
+
+Affected files:
+
+- heartbeat SQL, public Store/PostgreSQL contract, Worker, and fakes
+- idempotency index and conflict insert
+- shared PostgreSQL row scanner
+- migration, unit, PostgreSQL, public API, and external-consumer tests
+- architecture, runtime, performance, verification, and workflow records
+
+Explanation:
+
+Heartbeat now returns only an error and its SQL returns one boolean instead of
+the complete job, keeping response traffic and allocation independent of
+payload size. The idempotency index is non-partial so `FOR KEY SHARE` blocks
+queue/key changes; PostgreSQL's default distinct-`NULL` uniqueness continues
+to allow unkeyed jobs. Job payloads now scan through a bounded owning
+`pgtype.BytesScanner` that checks source length before allocation and copies an
+accepted bytea exactly once.
+
+Verification:
+
+- expected-red scalar-heartbeat, partial-index, and row-allocation regressions
+- focused local package tests, 10 repeats, vet, and integration-tag compile
+- exact clean-source format, vet, unit, build, full race, 50 affected race
+  repeats, fuzz, and 97.0% statement coverage on `development`
+- PostgreSQL 17.10 race and coverage integration, 10 race-instrumented
+  key-update lock repeats, and three heartbeat allocation repeats
+- exact-source standalone external-consumer test/build and performance matrix
+- every materially changed production function is 100% covered
+
+Risks / non-goals:
+
+- Heartbeat's unreleased return signature changes from `(Job, error)` to
+  `error`; Complete and Fail still return the transitioned Job.
+- The migration is unreleased and immutable; no live schema was upgraded.
+- Delivery remains at least once and handler idempotency remains
+  consumer-owned.
+- Fresh independent reviews remain orchestrator-owned. This repair does not
+  claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 03:18 CDT — Bind idempotency snapshots and Worker reconciliation
 
 Commit: `62d565aa1d3f4ebf19cc4d39bf87d2764c676c8b`

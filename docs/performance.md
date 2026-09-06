@@ -83,3 +83,22 @@ path but not the conflict-only retaining read.
 This is confirmation evidence, not an optimization claim. No formal latency
 threshold or representative consumer workload exists yet; the original
 provisional admission and re-profile trigger remain unchanged.
+
+The `53cf140` repair removes payload return from Heartbeat and removes the
+second payload copy from all job-row scans. Exact-source PostgreSQL integration
+benchmarks Heartbeat through pgx with empty and 1 MiB jobs and requires the
+large-payload result to remain within 64 KiB/op of the empty-payload allocation;
+three repeats passed. The SQL-shape unit test separately requires exactly one
+returned boolean and rejects any payload column, covering network response
+shape without relying on allocator behavior.
+
+The complete matrix was rerun because shared row scanning changed. It remains
+admission evidence rather than a speedup claim:
+
+| Workload | Samples | p50 | p95 | p99 | Loop throughput |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| empty queue | 100 | 767.891 us | 1.024705 ms | 1.239738 ms | 1254.83 ops/s |
+| 100-job small backlog, empty payload | 50 | 3.825155 ms | 4.030597 ms | 5.746831 ms | 136.03 ops/s |
+| 500-job typical backlog, 1 KiB payload | 200 | 4.277140 ms | 9.873139 ms | 10.001151 ms | 115.86 ops/s |
+| 20-job, 1 MiB payload boundary | 20 | 7.055610 ms | 12.140182 ms | 12.525347 ms | 63.77 ops/s |
+| 100-row locked prefix | 1 | 23.375121 ms | N/A | N/A | N/A |

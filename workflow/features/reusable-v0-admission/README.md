@@ -10,5 +10,9 @@ liveness defects; both are repaired with exact-source race and PostgreSQL
 evidence. The fourth independent review found an idempotency snapshot race,
 prevalidation payload allocation, and Worker reconciliation-value loss; all
 three are repaired with exact-source race, PostgreSQL, external-consumer, and
+performance evidence. The fifth independent review found heartbeat payload
+amplification, ineffective key-update retention under a partial unique index,
+and double/unbounded row payload copying; all three are repaired with
+exact-source race, PostgreSQL, allocation, external-consumer, fuzz, and
 performance evidence. Admission remains active until two fresh
-orchestrator-owned reviews pass on the final candidate.
+orchestrator-owned reviews admit the final candidate.

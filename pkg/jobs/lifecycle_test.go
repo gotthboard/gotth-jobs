@@ -46,6 +46,7 @@ func TestClaimReturnsOneFencedAttempt(t *testing.T) {
 	if len(tx.arguments) != 1 || tx.arguments[0][1] != token || tx.arguments[0][3] != int64(time.Minute/time.Microsecond) {
 		t.Fatalf("claim arguments = %+v", tx.arguments)
 	}
+	assertJobQueryOptions(t, tx.queryOptions[0])
 }
 
 func TestClaimPreservesFencingHandleOnUnknownCommit(t *testing.T) {
@@ -106,6 +107,7 @@ func TestHeartbeatCompleteAndFailTransitions(t *testing.T) {
 			if err != nil || job.State != test.wantState || tx.commits != 1 {
 				t.Fatalf("operation = (%+v, %v), commits=%d", job, err, tx.commits)
 			}
+			assertJobQueryOptions(t, tx.queryOptions[0])
 		})
 	}
 }
@@ -124,6 +126,9 @@ func TestHeartbeatReturnsOnlyScalarLeaseStatus(t *testing.T) {
 	}
 	if strings.Contains(tx.statements[0], "payload") {
 		t.Fatalf("Heartbeat SQL returns payload: %q", tx.statements[0])
+	}
+	if len(tx.queryOptions[0]) != 0 {
+		t.Fatalf("Heartbeat unexpectedly uses job result options: %#v", tx.queryOptions[0])
 	}
 }
 

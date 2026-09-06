@@ -112,7 +112,8 @@ func (repository *PostgreSQL) Claim(ctx context.Context, request ClaimRequest) (
 //
 // Complexity: local time is O(q+w+t), Omega(q+w+t), tight Theta(q+w+t) for
 // queue, worker, and token validation; auxiliary space O(1), Omega(1), tight
-// Theta(1); database cost is the claimSQL operation.
+// Theta(1); database cost is the claimSQL operation using two DescribeExec
+// protocol round trips.
 func (repository *PostgreSQL) claimWithToken(ctx context.Context, request ClaimRequest, token string) (Job, error) {
 	if repository == nil || nilLike(repository.database) || ctx == nil {
 		return Job{}, fmt.Errorf("%w: repository and context are required", ErrInvalid)
@@ -124,9 +125,9 @@ func (repository *PostgreSQL) claimWithToken(ctx context.Context, request ClaimR
 		return Job{}, fmt.Errorf("%w: lease token is invalid", ErrInvalid)
 	}
 	result, err := transact(ctx, repository.database, func(transaction pgx.Tx) (claimResult, error) {
-		job, err := scanJob(transaction.QueryRow(ctx, claimSQL,
+		job, err := scanJob(transaction.QueryRow(ctx, claimSQL, jobQueryArguments(
 			request.Queue, token, request.Worker, request.LeaseDuration.Microseconds(),
-		))
+		)...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return claimResult{}, nil
 		}
@@ -209,13 +210,14 @@ func (repository *PostgreSQL) Fail(ctx context.Context, lease Lease, failure Fai
 // committing partial state.
 //
 // Complexity: for returned payload size p, local time and auxiliary space are
-// tight Theta(p); database cost is one indexed update, one indexed state read
-// on rejection, and one transaction.
+// tight Theta(p); database cost is one indexed update using two DescribeExec
+// protocol round trips, one indexed state read on rejection, and one
+// transaction.
 func (repository *PostgreSQL) leaseMutation(ctx context.Context, lease Lease, statement string, arguments ...any) (Job, error) {
 	return transact(ctx, repository.database, func(transaction pgx.Tx) (Job, error) {
 		queryArguments := []any{lease.JobID, lease.Token}
 		queryArguments = append(queryArguments, arguments...)
-		job, err := scanJob(transaction.QueryRow(ctx, statement, queryArguments...))
+		job, err := scanJob(transaction.QueryRow(ctx, statement, jobQueryArguments(queryArguments...)...))
 		if err == nil {
 			return job, nil
 		}

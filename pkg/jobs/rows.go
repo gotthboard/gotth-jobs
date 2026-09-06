@@ -19,6 +19,27 @@ job.idempotency_key, job.state, job.attempts, job.max_attempts,
 job.available_at, job.created_at, job.updated_at, job.lease_token,
 job.lease_owner, job.lease_until, job.last_error, job.finished_at`
 
+var jobResultFormats = pgx.QueryResultFormatsByOID{
+	pgtype.TextOID:        pgx.BinaryFormatCode,
+	pgtype.ByteaOID:       pgx.BinaryFormatCode,
+	pgtype.Int4OID:        pgx.BinaryFormatCode,
+	pgtype.TimestamptzOID: pgx.BinaryFormatCode,
+}
+
+// jobQueryArguments forces pgx to describe each job-returning statement and
+// decode every job-column type from its binary result format regardless of the
+// connection's configured default query mode. DescribeExec is required because
+// the OID result map is not consulted by pgx's Exec or SimpleProtocol paths.
+//
+// Complexity: for n SQL arguments, time and auxiliary space are tight
+// Theta(n) for the query-owned argument slice. Query execution performs the
+// two protocol round trips required by pgx DescribeExec.
+func jobQueryArguments(arguments ...any) []any {
+	result := make([]any, 0, len(arguments)+2)
+	result = append(result, pgx.QueryExecModeDescribeExec, jobResultFormats)
+	return append(result, arguments...)
+}
+
 type boundedPayloadScanner struct {
 	value []byte
 }
@@ -31,12 +52,11 @@ var _ pgtype.BytesScanner = (*boundedPayloadScanner)(nil)
 // Complexity: for accepted payload size p, time and auxiliary space are tight
 // Theta(p); rejection time and auxiliary space are tight Theta(1).
 func (scanner *boundedPayloadScanner) ScanBytes(source []byte) error {
+	if source == nil {
+		return fmt.Errorf("stored job payload is NULL")
+	}
 	if len(source) > MaxPayloadBytes {
 		return fmt.Errorf("stored job payload exceeds the schema contract")
-	}
-	if source == nil {
-		scanner.value = nil
-		return nil
 	}
 	scanner.value = make([]byte, len(source))
 	copy(scanner.value, source)
@@ -82,25 +102,28 @@ func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
 	var payload boundedPayloadScanner
 	var state string
 	var key, token, owner *string
-	var leaseUntil, finishedAt *time.Time
+	var availableAt, createdAt, updatedAt, leaseUntil, finishedAt *time.Time
 	var err error
 	if fingerprint == nil {
 		err = row.Scan(
 			&job.ID, &job.Queue, &job.Kind, &payload, &key, &state,
-			&job.Attempts, &job.MaxAttempts, &job.AvailableAt, &job.CreatedAt,
-			&job.UpdatedAt, &token, &owner, &leaseUntil, &job.LastError,
+			&job.Attempts, &job.MaxAttempts, &availableAt, &createdAt,
+			&updatedAt, &token, &owner, &leaseUntil, &job.LastError,
 			&finishedAt,
 		)
 	} else {
 		err = row.Scan(
 			fingerprint, &job.ID, &job.Queue, &job.Kind, &payload, &key,
-			&state, &job.Attempts, &job.MaxAttempts, &job.AvailableAt,
-			&job.CreatedAt, &job.UpdatedAt, &token, &owner, &leaseUntil,
+			&state, &job.Attempts, &job.MaxAttempts, &availableAt,
+			&createdAt, &updatedAt, &token, &owner, &leaseUntil,
 			&job.LastError, &finishedAt,
 		)
 	}
 	if err != nil {
 		return Job{}, err
+	}
+	if availableAt == nil || createdAt == nil || updatedAt == nil {
+		return Job{}, fmt.Errorf("stored job has NULL mandatory timestamp")
 	}
 	job.Payload = payload.value
 	job.State = State(state)
@@ -113,15 +136,21 @@ func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
 	if owner != nil {
 		job.LeaseOwner = *owner
 	}
+	job.AvailableAt = availableAt.UTC()
+	job.CreatedAt = createdAt.UTC()
+	job.UpdatedAt = updatedAt.UTC()
 	if leaseUntil != nil {
 		job.LeaseUntil = leaseUntil.UTC()
+		if !isPostgreSQLTimestamp(job.LeaseUntil) {
+			return Job{}, fmt.Errorf("stored job has invalid lease timestamp")
+		}
 	}
 	if finishedAt != nil {
 		job.FinishedAt = finishedAt.UTC()
+		if !isPostgreSQLTimestamp(job.FinishedAt) {
+			return Job{}, fmt.Errorf("stored job has invalid finished timestamp")
+		}
 	}
-	job.AvailableAt = job.AvailableAt.UTC()
-	job.CreatedAt = job.CreatedAt.UTC()
-	job.UpdatedAt = job.UpdatedAt.UTC()
 	if err := validateStoredJob(job); err != nil {
 		return Job{}, err
 	}
@@ -145,8 +174,18 @@ func validateStoredJob(job Job) error {
 	if err := validateName("stored kind", job.Kind, MaxKindBytes); err != nil {
 		return fmt.Errorf("stored job violates the schema contract: %w", err)
 	}
+	if job.Payload == nil {
+		return fmt.Errorf("stored job payload is NULL")
+	}
 	if len(job.Payload) > MaxPayloadBytes || len(job.IdempotencyKey) > MaxIdempotencyKeyBytes || len(job.LastError) > MaxFailureBytes || job.Attempts < 0 || job.Attempts > job.MaxAttempts || job.MaxAttempts < 1 || job.MaxAttempts > MaxAttempts {
 		return fmt.Errorf("stored job violates the schema contract")
+	}
+	if !isPostgreSQLTimestamp(job.AvailableAt) || !isPostgreSQLTimestamp(job.CreatedAt) || !isPostgreSQLTimestamp(job.UpdatedAt) {
+		return fmt.Errorf("stored job has invalid mandatory timestamp")
+	}
+	if (!job.LeaseUntil.IsZero() && !isPostgreSQLTimestamp(job.LeaseUntil)) ||
+		(!job.FinishedAt.IsZero() && !isPostgreSQLTimestamp(job.FinishedAt)) {
+		return fmt.Errorf("stored job has invalid optional timestamp")
 	}
 	if !utf8.ValidString(job.IdempotencyKey) || !utf8.ValidString(job.LeaseOwner) || !utf8.ValidString(job.LastError) || strings.IndexByte(job.IdempotencyKey, 0) >= 0 || strings.IndexByte(job.LeaseOwner, 0) >= 0 || strings.IndexByte(job.LastError, 0) >= 0 {
 		return fmt.Errorf("stored job has invalid text")

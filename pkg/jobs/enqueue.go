@@ -22,6 +22,8 @@ const idempotentJobSQL = `SELECT request_fingerprint, ` + jobColumns + ` FROM pu
 WHERE queue = $1 AND idempotency_key = $2
 FOR KEY SHARE`
 
+const transactionIsolationSQL = `SELECT current_setting('transaction_isolation')`
+
 type enqueueResult struct {
 	job     Job
 	created bool
@@ -35,7 +37,8 @@ type enqueueResult struct {
 // Theta(q+k+p+i) and auxiliary space is Theta(p) for valid requests; rejected
 // oversized payloads use O(q+k+i) time and Theta(1) auxiliary space. Database
 // cost is one transaction with one insert, plus one indexed retaining read
-// only on an idempotency conflict.
+// only on an idempotency conflict, with two DescribeExec protocol round trips
+// per job-returning statement.
 func (repository *PostgreSQL) Enqueue(ctx context.Context, request EnqueueRequest) (Job, bool, error) {
 	if repository == nil || repository.database == nil {
 		return Job{}, false, fmt.Errorf("%w: repository is required", ErrInvalid)
@@ -55,22 +58,43 @@ func (repository *PostgreSQL) Enqueue(ctx context.Context, request EnqueueReques
 }
 
 // EnqueueTx inserts a job using the caller's existing transaction and never
-// commits or rolls it back. The caller owns commit-outcome reconciliation.
+// commits or rolls it back. The transaction must use Read Committed; the
+// caller owns commit-outcome reconciliation.
 //
 // Complexity: for q queue, k kind, p payload, and i key bytes, local time is
 // Theta(q+k+p+i) and auxiliary space is Theta(p) for valid requests; rejected
 // oversized payloads use O(q+k+i) time and Theta(1) auxiliary space. Database
-// cost is one insert, plus one indexed retaining read only on an idempotency
-// conflict.
+// cost is one isolation read and one insert, plus one indexed retaining read
+// only on an idempotency conflict. Each job-returning statement uses two
+// DescribeExec protocol round trips.
 func (repository *PostgreSQL) EnqueueTx(ctx context.Context, transaction pgx.Tx, request EnqueueRequest) (Job, bool, error) {
 	if repository == nil || repository.database == nil || ctx == nil || nilLike(transaction) {
 		return Job{}, false, fmt.Errorf("%w: repository, context, and transaction are required", ErrInvalid)
 	}
-	prepared, err := prepareEnqueue(request)
-	if err != nil {
+	if err := validateEnqueue(request); err != nil {
 		return Job{}, false, err
 	}
-	return repository.enqueuePrepared(ctx, transaction, prepared)
+	if err := validateEnqueueTxIsolation(ctx, transaction); err != nil {
+		return Job{}, false, err
+	}
+	return repository.enqueuePrepared(ctx, transaction, cloneEnqueue(request))
+}
+
+// validateEnqueueTxIsolation enforces the new-snapshot behavior required by
+// the idempotency fallback without committing, rolling back, or retrying the
+// caller's domain transaction.
+//
+// Complexity: local time and auxiliary space are tight Theta(1); database
+// cost is one transaction-local setting read.
+func validateEnqueueTxIsolation(ctx context.Context, transaction pgx.Tx) error {
+	var isolation string
+	if err := transaction.QueryRow(ctx, transactionIsolationSQL).Scan(&isolation); err != nil {
+		return fmt.Errorf("inspect enqueue transaction isolation: %w", err)
+	}
+	if isolation != string(pgx.ReadCommitted) {
+		return fmt.Errorf("%w: EnqueueTx requires Read Committed isolation, got %q", ErrInvalid, isolation)
+	}
+	return nil
 }
 
 // enqueuePrepared executes the transaction-bound statements for a request
@@ -79,17 +103,18 @@ func (repository *PostgreSQL) EnqueueTx(ctx context.Context, transaction pgx.Tx,
 // Complexity: for q queue, k kind, and p payload bytes, local time is
 // Theta(q+k+p) for fingerprinting and scanning while auxiliary space is
 // Theta(p); database cost is one insert plus one indexed retaining read only
-// on an idempotency conflict.
+// on an idempotency conflict, with two DescribeExec protocol round trips per
+// job-returning statement.
 func (repository *PostgreSQL) enqueuePrepared(ctx context.Context, transaction pgx.Tx, request EnqueueRequest) (Job, bool, error) {
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, false, err
 	}
 	fingerprint := requestFingerprint(request)
-	job, err := scanJob(transaction.QueryRow(ctx, enqueueSQL,
+	job, err := scanJob(transaction.QueryRow(ctx, enqueueSQL, jobQueryArguments(
 		id, request.Queue, request.Kind, request.Payload, request.IdempotencyKey,
 		fingerprint[:], request.MaxAttempts, availableArgument(request.AvailableAt),
-	))
+	)...))
 	if err == nil {
 		return job, true, nil
 	}
@@ -100,7 +125,7 @@ func (repository *PostgreSQL) enqueuePrepared(ctx context.Context, transaction p
 		return Job{}, false, fmt.Errorf("insert job returned no row without an idempotency key")
 	}
 
-	stored, job, err := scanJobWithFingerprint(transaction.QueryRow(ctx, idempotentJobSQL, request.Queue, request.IdempotencyKey))
+	stored, job, err := scanJobWithFingerprint(transaction.QueryRow(ctx, idempotentJobSQL, jobQueryArguments(request.Queue, request.IdempotencyKey)...))
 	if err != nil {
 		return Job{}, false, fmt.Errorf("read idempotent job: %w", err)
 	}

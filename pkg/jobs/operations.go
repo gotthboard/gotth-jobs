@@ -42,7 +42,7 @@ RETURNING ` + jobColumns
 //
 // Complexity: for payload bytes p and ID bytes i, local time O(p+i), Omega(i),
 // tight Theta(p+i); auxiliary space O(p), Omega(p), tight Theta(p); database
-// cost is one primary-key read.
+// cost is one primary-key read using two DescribeExec protocol round trips.
 func (repository *PostgreSQL) Get(ctx context.Context, id string) (Job, error) {
 	if err := validateRead(repository, ctx); err != nil {
 		return Job{}, err
@@ -50,7 +50,7 @@ func (repository *PostgreSQL) Get(ctx context.Context, id string) (Job, error) {
 	if err := validateJobID(id); err != nil {
 		return Job{}, err
 	}
-	job, err := scanJob(repository.database.QueryRow(ctx, getSQL, id))
+	job, err := scanJob(repository.database.QueryRow(ctx, getSQL, jobQueryArguments(id)...))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Job{}, ErrNotFound
 	}
@@ -88,8 +88,8 @@ func (repository *PostgreSQL) Counts(ctx context.Context, queue string) (Counts,
 // Complexity: for n returned jobs with total payload bytes p and queue/ID
 // validation bytes v, local time O(n+p+v), Omega(v), tight Theta(n+p+v);
 // auxiliary space O(n+p), Omega(n), tight Theta(n+p); database cost is one
-// indexed ordered scan bounded by limit; cursor timestamp validation is
-// constant-time.
+// indexed ordered scan bounded by limit using two DescribeExec protocol round
+// trips; cursor timestamp validation is constant-time.
 func (repository *PostgreSQL) ListDead(ctx context.Context, queue string, cursor *DeadCursor, limit int) ([]Job, error) {
 	if err := validateRead(repository, ctx); err != nil {
 		return nil, err
@@ -112,7 +112,7 @@ func (repository *PostgreSQL) ListDead(ctx context.Context, queue string, cursor
 		cursorTime = cursor.FinishedAt
 		cursorID = cursor.ID
 	}
-	rows, err := repository.database.Query(ctx, listDeadSQL, queue, cursorTime, cursorID, limit)
+	rows, err := repository.database.Query(ctx, listDeadSQL, jobQueryArguments(queue, cursorTime, cursorID, limit)...)
 	if err != nil {
 		return nil, fmt.Errorf("list dead jobs: %w", err)
 	}
@@ -140,20 +140,21 @@ func (repository *PostgreSQL) ListDead(ctx context.Context, queue string, cursor
 // Complexity: for ID bytes i and payload bytes p in the returned row, local
 // time O(i+p), Omega(i), tight Theta(i+p); auxiliary space O(p), Omega(p),
 // tight Theta(p); database cost is one primary-key update and one read only
-// when no transition occurs.
+// when no transition occurs, with two DescribeExec protocol round trips per
+// job-returning statement.
 func (repository *PostgreSQL) Cancel(ctx context.Context, id string) (Job, error) {
 	if err := validateMutation(repository, ctx, id); err != nil {
 		return Job{}, err
 	}
 	return transact(ctx, repository.database, func(transaction pgx.Tx) (Job, error) {
-		job, err := scanJob(transaction.QueryRow(ctx, cancelSQL, id))
+		job, err := scanJob(transaction.QueryRow(ctx, cancelSQL, jobQueryArguments(id)...))
 		if err == nil {
 			return job, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return Job{}, fmt.Errorf("cancel job: %w", err)
 		}
-		job, err = scanJob(transaction.QueryRow(ctx, getSQL, id))
+		job, err = scanJob(transaction.QueryRow(ctx, getSQL, jobQueryArguments(id)...))
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Job{}, ErrNotFound
 		}
@@ -173,20 +174,21 @@ func (repository *PostgreSQL) Cancel(ctx context.Context, id string) (Job, error
 // Complexity: for ID bytes i and payload bytes p in the returned row, local
 // time O(i+p), Omega(i), tight Theta(i+p); auxiliary space O(p), Omega(p),
 // tight Theta(p); database cost is one primary-key update and one read only
-// when no transition occurs.
+// when no transition occurs, with two DescribeExec protocol round trips per
+// job-returning statement.
 func (repository *PostgreSQL) Redrive(ctx context.Context, id string) (Job, error) {
 	if err := validateMutation(repository, ctx, id); err != nil {
 		return Job{}, err
 	}
 	return transact(ctx, repository.database, func(transaction pgx.Tx) (Job, error) {
-		job, err := scanJob(transaction.QueryRow(ctx, redriveSQL, id))
+		job, err := scanJob(transaction.QueryRow(ctx, redriveSQL, jobQueryArguments(id)...))
 		if err == nil {
 			return job, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return Job{}, fmt.Errorf("redrive job: %w", err)
 		}
-		if _, err := scanJob(transaction.QueryRow(ctx, getSQL, id)); errors.Is(err, pgx.ErrNoRows) {
+		if _, err := scanJob(transaction.QueryRow(ctx, getSQL, jobQueryArguments(id)...)); errors.Is(err, pgx.ErrNoRows) {
 			return Job{}, ErrNotFound
 		} else if err != nil {
 			return Job{}, fmt.Errorf("read unmodified job after redrive: %w", err)

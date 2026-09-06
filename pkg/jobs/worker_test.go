@@ -46,11 +46,13 @@ func validWorker(store Store, handler Handler) Worker {
 }
 
 func claimedJob(attempt int) Job {
+	now := time.Unix(1_900_000_000, 0).UTC()
 	return Job{
 		ID: "0123456789abcdef0123456789abcdef", Queue: "default", Kind: "send",
-		State: StateRunning, Attempts: attempt, MaxAttempts: 3,
+		Payload: []byte{}, State: StateRunning, Attempts: attempt, MaxAttempts: 3,
+		AvailableAt: now, CreatedAt: now, UpdatedAt: now,
 		Lease:      Lease{JobID: "0123456789abcdef0123456789abcdef", Token: strings.Repeat("ab", 32)},
-		LeaseOwner: "worker-1", LeaseUntil: time.Now().UTC().Add(time.Minute),
+		LeaseOwner: "worker-1", LeaseUntil: now.Add(time.Minute),
 	}
 }
 
@@ -116,6 +118,92 @@ func TestWorkerRunPreservesUnknownClaimOutcomeForReconciliation(t *testing.T) {
 	}
 	if handled {
 		t.Fatal("handler ran for an unconfirmed claim")
+	}
+}
+
+func TestWorkerPreservesUnknownAcknowledgementOutcomes(t *testing.T) {
+	job := claimedJob(1)
+	unknown := errors.Join(ErrCommitOutcomeUnknown, errors.New("connection lost after commit"))
+	tests := []struct {
+		name      string
+		handler   Handler
+		configure func(*stubStore, *int)
+		wantState State
+	}{
+		{
+			name: "heartbeat", wantState: StateRunning,
+			handler: func(ctx context.Context, _ Job) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			configure: func(store *stubStore, calls *int) {
+				store.heartbeat = func(context.Context, Lease, time.Duration) error {
+					*calls++
+					return unknown
+				}
+			},
+		},
+		{
+			name: "complete", wantState: StateSucceeded,
+			handler: func(context.Context, Job) error { return nil },
+			configure: func(store *stubStore, calls *int) {
+				store.complete = func(context.Context, Lease) (Job, error) {
+					*calls++
+					result := job
+					result.State = StateSucceeded
+					result.Payload = []byte("complete-result")
+					return result, unknown
+				}
+			},
+		},
+		{
+			name: "fail", wantState: StatePending,
+			handler: func(context.Context, Job) error { return errors.New("handler failed") },
+			configure: func(store *stubStore, calls *int) {
+				store.fail = func(context.Context, Lease, Failure) (Job, error) {
+					*calls++
+					result := job
+					result.State = StatePending
+					result.Payload = []byte("fail-result")
+					return result, unknown
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			store := &stubStore{
+				heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
+				complete:  func(context.Context, Lease) (Job, error) { return Job{}, errors.New("unexpected complete") },
+				fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, errors.New("unexpected fail") },
+			}
+			test.configure(store, &calls)
+			worker := validWorker(store, test.handler)
+			worker.HeartbeatInterval = time.Millisecond
+
+			err := worker.runAttempt(context.Background(), job)
+			if !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, unknown) {
+				t.Fatalf("runAttempt() = %v, want original unknown-commit error", err)
+			}
+			var reconciliation *LeaseReconciliationError
+			if !errors.As(err, &reconciliation) {
+				t.Fatalf("runAttempt() error %T has no lease reconciliation accessors", err)
+			}
+			got := reconciliation.ReconciliationJob()
+			if got.ID != job.ID || got.State != test.wantState {
+				t.Fatalf("reconciliation job = %+v, want ID %s state %s", got, job.ID, test.wantState)
+			}
+			if reconciliation.ReconciliationLease() != job.Lease {
+				t.Fatalf("reconciliation lease = %+v, want %+v", reconciliation.ReconciliationLease(), job.Lease)
+			}
+			if strings.Contains(err.Error(), job.ID) || strings.Contains(err.Error(), job.Lease.Token) {
+				t.Fatalf("reconciliation error leaks identity or token: %q", err)
+			}
+			if calls != 1 {
+				t.Fatalf("acknowledgement calls = %d, want 1", calls)
+			}
+		})
 	}
 }
 
@@ -274,10 +362,18 @@ func TestWorkerPollsWithoutBusyLoopAndValidatesConfiguration(t *testing.T) {
 	badHeartbeat := validWorker(store, func(context.Context, Job) error { return nil })
 	badHeartbeat.HeartbeatInterval = badHeartbeat.LeaseDuration
 	invalid = append(invalid, badHeartbeat)
+	tooLittleMargin := validWorker(store, func(context.Context, Job) error { return nil })
+	tooLittleMargin.HeartbeatInterval = tooLittleMargin.LeaseDuration/2 + time.Microsecond
+	invalid = append(invalid, tooLittleMargin)
 	for _, candidate := range invalid {
 		if err := candidate.validate(); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("validate(%+v) = %v", candidate, err)
 		}
+	}
+	atBoundary := validWorker(store, func(context.Context, Job) error { return nil })
+	atBoundary.HeartbeatInterval = atBoundary.LeaseDuration / 2
+	if err := atBoundary.validate(); err != nil {
+		t.Fatalf("half-lease heartbeat margin rejected: %v", err)
 	}
 }
 
@@ -288,6 +384,45 @@ func TestWorkerRejectsInvalidClaimedAttempt(t *testing.T) {
 	worker := validWorker(store, func(context.Context, Job) error { return nil })
 	if err := worker.Run(context.Background()); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Run(invalid claim) = %v", err)
+	}
+}
+
+func TestWorkerRejectsClaimedAttemptTimestampAndPayloadShapes(t *testing.T) {
+	now := time.Unix(1_900_000_000, 0).UTC()
+	tests := []struct {
+		name   string
+		mutate func(*Job)
+	}{
+		{name: "NULL payload", mutate: func(job *Job) { job.Payload = nil }},
+		{name: "missing available", mutate: func(job *Job) { job.AvailableAt = time.Time{} }},
+		{name: "non UTC created", mutate: func(job *Job) { job.CreatedAt = now.In(time.FixedZone("not-utc", 3600)) }},
+		{name: "out of range updated", mutate: func(job *Job) { job.UpdatedAt = maximumPostgreSQLTimestamp.Add(time.Microsecond) }},
+		{name: "sub-microsecond lease", mutate: func(job *Job) { job.LeaseUntil = now.Add(time.Nanosecond) }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := claimedJob(1)
+			test.mutate(&job)
+			handled := false
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			store := &stubStore{
+				claim:     func(context.Context, ClaimRequest) (Job, error) { return job, nil },
+				heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
+				complete: func(context.Context, Lease) (Job, error) {
+					cancel()
+					return job, nil
+				},
+				fail: func(context.Context, Lease, Failure) (Job, error) { return job, nil },
+			}
+			worker := validWorker(store, func(context.Context, Job) error { handled = true; return nil })
+			if err := worker.Run(ctx); !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Run(%s) = %v, want ErrInvalid", test.name, err)
+			}
+			if handled {
+				t.Fatal("handler ran for invalid claimed job")
+			}
+		})
 	}
 }
 

@@ -39,6 +39,13 @@ non-partial unique index on `(queue, idempotency_key)` makes those columns key
 columns for row locking; PostgreSQL's default distinct-`NULL` uniqueness still
 permits multiple jobs without an idempotency key.
 
+The conflict fallback depends on a fresh statement snapshot. Library-owned
+transactions request Read Committed, and `EnqueueTx` verifies the caller's
+transaction isolation with `current_setting('transaction_isolation')` before
+insertion. Repeatable Read and Serializable are rejected. `EnqueueTx` never
+retries a statement or transaction; a consumer choosing transaction retries
+must retry the entire domain transaction itself.
+
 ## Claim mechanism
 
 A short Read Committed transaction first marks expired attempts dead when they
@@ -66,6 +73,12 @@ boolean from PostgreSQL, so renewal response traffic and allocation do not
 scale with payload size. Complete and fail continue to return the transitioned
 job.
 
+If Worker receives `ErrCommitOutcomeUnknown` from Heartbeat, Complete, or
+Fail, it returns `LeaseReconciliationError`. The typed error unwraps the
+original failure and exposes the exact affected lease plus the known or
+returned job only for reconciliation. Its text omits job identity and the
+secret token, and Worker never retries the acknowledgement implicitly.
+
 ## Worker
 
 `Worker.Run` executes one job at a time. A heartbeat goroutine is bounded to
@@ -82,12 +95,26 @@ returns `ClaimReconciliationError` without invoking the handler. The typed
 error unwraps the original failure and exposes the unconfirmed job only for
 durable ID/token reconciliation; its text omits every job field.
 
+Worker accepts a heartbeat interval no greater than half the lease duration.
+The remaining half is an explicit budget for post-Claim startup, scheduling,
+and heartbeat database round trips. This reduces deterministic first-renewal
+expiry risk but is not a hard liveness guarantee across arbitrary runtime,
+host, network, or database pauses.
+
 ## Trust boundary
 
 Job rows, error text, and payloads read from PostgreSQL are untrusted. The
 consumer authenticates callers and decides who may enqueue, inspect, cancel,
 or redrive. The library validates every public input and copies payload bytes
-at the API boundary. Returned bytea payloads use pgx's binary `BytesScanner`
-hook: the scanner checks the borrowed source length before allocation and
-copies accepted bytes exactly once into library-owned memory. It never logs
-payloads, idempotency keys, or errors.
+at the API boundary. Every job-returning query forces pgx `DescribeExec` and
+binary formats for every job-column OID, overriding connection defaults
+including Exec and SimpleProtocol. `DescribeExec` obtains result OIDs and costs two
+protocol round trips per statement. The binary `BytesScanner` checks pgx's
+borrowed source length before payload allocation and makes exactly one copy
+into library-owned memory; pgx's network/read buffers remain separate runtime
+storage. SQL NULL payloads are distinct from empty bytea and are rejected.
+Mandatory stored timestamps must be present; every mandatory or present
+optional timestamp is normalized after pgx decoding and validated as finite,
+microsecond-precision UTC before exposure. Custom Store jobs must already use
+that UTC contract. The library never logs payloads, idempotency keys, or
+errors.

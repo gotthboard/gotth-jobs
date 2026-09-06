@@ -46,6 +46,7 @@ func TestGetAndCountsReturnBoundedObservations(t *testing.T) {
 	if err != nil || job.ID != id || string(job.Payload) != "payload" {
 		t.Fatalf("Get() = (%+v, %v)", job, err)
 	}
+	assertJobQueryOptions(t, database.queryOptions[0])
 	counts, err := repository.Counts(context.Background(), "default")
 	if err != nil || counts != (Counts{Pending: 1, Running: 2, Succeeded: 3, Dead: 4, Canceled: 5}) {
 		t.Fatalf("Counts() = (%+v, %v)", counts, err)
@@ -79,6 +80,7 @@ func TestListDeadClosesRowsAndHonorsCursor(t *testing.T) {
 	if len(database.queryArguments) != 1 || database.queryArguments[0][3] != 2 {
 		t.Fatalf("ListDead arguments = %+v", database.queryArguments)
 	}
+	assertJobQueryOptions(t, database.queryOptions[0])
 	emptyRows := &stubRows{}
 	repository, _ = NewPostgreSQL(&stubDatabase{rows: emptyRows})
 	if jobs, err := repository.ListDead(context.Background(), "default", nil, MaxDeadPage); err != nil || len(jobs) != 0 {
@@ -163,6 +165,9 @@ func TestCancelAndRedriveStateTransitions(t *testing.T) {
 			}
 			if test.wantErr == nil && tx.commits != 1 {
 				t.Fatalf("successful operation committed %d times", tx.commits)
+			}
+			for _, options := range tx.queryOptions {
+				assertJobQueryOptions(t, options)
 			}
 		})
 	}

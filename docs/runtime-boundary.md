@@ -33,6 +33,10 @@
   `pgtype.BytesScanner` directly over borrowed driver memory. The memory is
   valid only until the next database method call, so the scanner must make its
   own accepted copy before returning.
+- pgx 5.10 query-mode contract: Exec and SimpleProtocol use text results;
+  leading per-query options override the connection default; DescribeExec
+  obtains statement/result OIDs each execution; and result formats by OID are
+  applied on that described extended-protocol path.
 
 ## Correctness-relevant limits
 
@@ -56,8 +60,20 @@ identifier, server-side function, session setting, or global state.
 Successful Heartbeat returns one PostgreSQL boolean and no job columns, so its
 response bytes and Go allocation are independent of stored payload size. Job
 payload scans use the binary bytea scanner hook to inspect source length before
-allocation, reject an oversized source without payload-sized storage, and copy
-an accepted source exactly once before borrowed driver memory expires.
+allocation, reject SQL NULL and oversized sources without payload-sized
+storage, and make one library ownership copy of an accepted source before
+borrowed driver memory expires. Every job-returning query forces per-query
+DescribeExec plus binary formats for every job-column OID, overriding all
+supported pgx connection defaults at a cost of two protocol round trips. This
+also avoids pgx text timestamp parsing limits at PostgreSQL's finite range. pgx network/read storage is not
+counted as the library ownership copy. Stored mandatory timestamps must be
+present, and all mandatory or present optional timestamps are finite,
+microsecond-precision UTC values before crossing the public boundary.
+
+`EnqueueTx` issues one transaction-local isolation inspection and accepts only
+Read Committed. It does not commit, roll back, or retry. Repeatable Read and
+Serializable callers receive `ErrInvalid`; any consumer retry policy must
+restart the complete domain transaction rather than retrying enqueue alone.
 
 Boundary verification covers every library limit at limit-1, limit, limit+1,
 and materially beyond where representable. Timestamp coverage applies the same
@@ -77,10 +93,16 @@ for reconciliation and must not be handled before durable confirmation.
 When the same result reaches `Worker.Run`, it is returned in a
 `ClaimReconciliationError`; the original error remains traversable, the
 handler does not run, and the error string omits the secret token.
+Unknown Heartbeat, Complete, and Fail commit outcomes become
+`LeaseReconciliationError`; the original error remains traversable, exact job
+and lease values are available only through reconciliation accessors, no
+identity or token appears in `Error()`, and Worker does not retry.
 
 Handler return closes the heartbeat stop signal and cancels the per-attempt
 context before the worker joins the heartbeat goroutine. Context cancellation
 caused by that local teardown is ignored for heartbeat classification; parent
 cancellation and independently produced heartbeat failures remain errors. The
-library changes no session-scoped setting, so pooled-state restoration tests
-are N/A.
+heartbeat interval may not exceed half the lease, reserving explicit startup,
+scheduler, and database round-trip margin. Arbitrary pauses can still consume
+that margin, so the bound is not a hard renewal guarantee. The library changes
+no session-scoped setting, so pooled-state restoration tests are N/A.

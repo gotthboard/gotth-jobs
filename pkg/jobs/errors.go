@@ -49,6 +49,50 @@ func (err *ClaimReconciliationError) ReconciliationJob() Job {
 	return err.job
 }
 
+// LeaseReconciliationError reports an acknowledgement whose commit outcome
+// is unknown. Its values are reconciliation-only and do not authorize a retry
+// or another job mutation.
+type LeaseReconciliationError struct {
+	job   Job
+	lease Lease
+	err   error
+}
+
+// Error deliberately omits the job ID and secret lease token.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func (err *LeaseReconciliationError) Error() string {
+	return "worker job acknowledgement commit outcome is unknown; reconciliation required"
+}
+
+// Unwrap preserves the original acknowledgement error for errors.Is and
+// errors.As.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func (err *LeaseReconciliationError) Unwrap() error {
+	return err.err
+}
+
+// ReconciliationJob returns the unconfirmed acknowledgement result. For a
+// Heartbeat outcome it is the claimed job known to Worker.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func (err *LeaseReconciliationError) ReconciliationJob() Job {
+	return err.job
+}
+
+// ReconciliationLease returns the exact affected lease. The token is secret
+// fencing material for durable reconciliation and must not be logged.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func (err *LeaseReconciliationError) ReconciliationLease() Lease {
+	return err.lease
+}
+
 type permanentError struct {
 	err error
 }

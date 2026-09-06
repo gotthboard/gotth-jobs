@@ -12,8 +12,9 @@ and truthful delivery guarantees.
 
 - `JOB-001`: Store job envelopes durably in PostgreSQL 17 with explicit size
   limits and no product-specific payload interpretation.
-- `JOB-002`: Let a consumer enqueue inside its existing `pgx.Tx` so domain
-  mutation and job creation can commit atomically.
+- `JOB-002`: Let a consumer enqueue inside its existing Read Committed
+  `pgx.Tx` so domain mutation and job creation can commit atomically without
+  library-owned transaction retries.
 - `JOB-003`: Deduplicate an exact idempotent request and reject reuse of the
   same queue/key pair for different request bytes or scheduling policy.
 - `JOB-004`: Claim exactly one eligible job in deterministic order without
@@ -30,7 +31,9 @@ and truthful delivery guarantees.
   job lookup, and per-queue state counts.
 - `JOB-010`: Provide a one-job-at-a-time worker loop with heartbeat, bounded
   heartbeat teardown, cancellation propagation, panic containment,
-  permanent-error classification, and bounded polling.
+  permanent-error classification, bounded polling, and an explicit renewal
+  interval no greater than half the lease without promising pause-free
+  liveness.
 - `JOB-011`: Classify transaction commit failures as an unknown outcome and
   never retry them implicitly; preserve any generated identity and fencing
   token needed for reconciliation without authorizing work under error.

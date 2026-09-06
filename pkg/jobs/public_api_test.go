@@ -34,6 +34,11 @@ func compilePublicAPI(ctx context.Context, database jobs.Database, transaction p
 	if errors.As(err, &reconciliation) {
 		_ = reconciliation.ReconciliationJob()
 	}
+	var leaseReconciliation *jobs.LeaseReconciliationError
+	if errors.As(err, &leaseReconciliation) {
+		_ = leaseReconciliation.ReconciliationJob()
+		_ = leaseReconciliation.ReconciliationLease()
+	}
 	var migrations fs.FS = jobs.Migrations()
 	_ = migrations
 	_ = dead

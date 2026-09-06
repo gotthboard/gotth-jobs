@@ -20,8 +20,9 @@ reaching pgx.
 - `NewPostgreSQL`: validate and retain the minimal database contract.
 - `Enqueue` / `EnqueueTx`: validate before copying, copy a bounded payload
   once, fingerprint, insert, or return an exact idempotent duplicate. The
-  duplicate fingerprint and job come from one retaining row read. Only
-  `Enqueue` owns commit classification.
+  duplicate fingerprint and job come from one retaining row read. `EnqueueTx`
+  first verifies Read Committed isolation and never retries the caller's
+  transaction. Only `Enqueue` owns commit classification.
 - `Claim`: reap exhausted expired attempts and atomically claim one eligible
   row with a fresh random token. A produced job returned with
   `ErrCommitOutcomeUnknown` exposes its ID and token for reconciliation only.
@@ -52,6 +53,32 @@ Exported sentinels are `ErrNotFound`, `ErrNoJob`, `ErrLeaseLost`,
 the underlying cause where one exists. `ClaimReconciliationError` is an
 exported typed Worker error that unwraps the original commit-unknown Claim
 error while keeping its reconciliation job out of `Error()` text.
+`LeaseReconciliationError` performs the same secret-safe traversal for
+commit-unknown Heartbeat, Complete, and Fail results and exposes the affected
+job and lease only through reconciliation accessors. Worker never retries
+those acknowledgements implicitly.
+
+## PostgreSQL decoding
+
+Every statement returning job columns passes `QueryExecModeDescribeExec` and
+binary result formats for the text, bytea, integer, and timestamptz OIDs
+through the actual pgx query call. This overrides every supported connection
+default, ensures pgx knows result OIDs, prevents bytea's text decoder from
+allocating a decoded payload before the bounded scanner runs, and preserves
+binary decoding across PostgreSQL's full finite timestamp range. The tradeoff is two protocol round
+trips per job-returning statement. The scanner rejects SQL NULL and oversized
+payloads before payload allocation and makes one ownership copy of accepted
+borrowed binary bytes. Row validation requires non-NULL mandatory timestamps
+and checks every mandatory or present optional timestamp for UTC, finite
+PostgreSQL range, and microsecond precision after pgx timestamps are normalized
+to UTC.
+
+## Worker renewal budget
+
+`HeartbeatInterval` must be positive and at most half `LeaseDuration`. The
+unused half budgets Claim return time, goroutine scheduling, and the renewal
+round trip; arbitrary pauses can still exceed the lease, so this is not a hard
+liveness guarantee.
 
 ## Production-unit order
 

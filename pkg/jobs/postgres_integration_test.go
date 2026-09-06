@@ -14,10 +14,15 @@ import (
 	"time"
 
 	"github.com/gotthboard/gotth-jobs/pkg/jobs"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func integrationRepository(t *testing.T) (*pgxpool.Pool, *jobs.PostgreSQL) {
+	return integrationRepositoryWithMode(t, pgx.QueryExecModeCacheStatement)
+}
+
+func integrationRepositoryWithMode(t *testing.T, mode pgx.QueryExecMode) (*pgxpool.Pool, *jobs.PostgreSQL) {
 	t.Helper()
 	databaseURL := os.Getenv("GOTTH_JOBS_TEST_DATABASE_URL")
 	if databaseURL == "" {
@@ -25,7 +30,12 @@ func integrationRepository(t *testing.T) (*pgxpool.Pool, *jobs.PostgreSQL) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	pool, err := pgxpool.New(ctx, databaseURL)
+	config, err := pgxpool.ParseConfig(databaseURL)
+	if err != nil {
+		t.Fatalf("parse PostgreSQL config: %v", err)
+	}
+	config.ConnConfig.DefaultQueryExecMode = mode
+	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
 		t.Fatalf("open PostgreSQL: %v", err)
 	}
@@ -57,6 +67,106 @@ func integrationRepository(t *testing.T) (*pgxpool.Pool, *jobs.PostgreSQL) {
 		t.Fatalf("construct repository: %v", err)
 	}
 	return pool, repository
+}
+
+func TestPostgreSQLJobPayloadScanningAcrossDefaultQueryModes(t *testing.T) {
+	type allocationResult struct {
+		maximum  int64
+		oversize int64
+	}
+	modes := []struct {
+		name string
+		mode pgx.QueryExecMode
+	}{
+		{name: "cache statement", mode: pgx.QueryExecModeCacheStatement},
+		{name: "cache describe", mode: pgx.QueryExecModeCacheDescribe},
+		{name: "describe exec", mode: pgx.QueryExecModeDescribeExec},
+		{name: "exec", mode: pgx.QueryExecModeExec},
+		{name: "simple protocol", mode: pgx.QueryExecModeSimpleProtocol},
+	}
+	results := make(map[string]allocationResult, len(modes))
+	for _, mode := range modes {
+		t.Run(mode.name, func(t *testing.T) {
+			pool, repository := integrationRepositoryWithMode(t, mode.mode)
+			ctx := context.Background()
+			created, wasCreated, err := repository.Enqueue(ctx, jobs.EnqueueRequest{
+				Queue: "query-mode", Kind: "payload", Payload: make([]byte, jobs.MaxPayloadBytes), MaxAttempts: 1,
+			})
+			if err != nil || !wasCreated || len(created.Payload) != jobs.MaxPayloadBytes {
+				t.Fatalf("Enqueue(maximum) = (payload=%d, %t, %v)", len(created.Payload), wasCreated, err)
+			}
+
+			measure := func(wantError bool) int64 {
+				t.Helper()
+				var lastErr error
+				result := testing.Benchmark(func(b *testing.B) {
+					b.ReportAllocs()
+					for range b.N {
+						job, getErr := repository.Get(ctx, created.ID)
+						lastErr = getErr
+						if !wantError && (getErr != nil || len(job.Payload) != jobs.MaxPayloadBytes) {
+							b.Fatalf("Get(maximum) = (payload=%d, %v)", len(job.Payload), getErr)
+						}
+						if wantError && getErr == nil {
+							b.Fatal("Get(oversized) succeeded")
+						}
+					}
+				})
+				if wantError && lastErr == nil {
+					t.Fatal("Get(oversized) did not return an error")
+				}
+				return result.AllocedBytesPerOp()
+			}
+			maximum := measure(false)
+			if _, err := pool.Exec(ctx, "ALTER TABLE public.gotth_jobs DROP CONSTRAINT gotth_jobs_payload_length"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, "UPDATE public.gotth_jobs SET payload = $2 WHERE id = $1", created.ID, make([]byte, jobs.MaxPayloadBytes+1)); err != nil {
+				t.Fatal(err)
+			}
+			oversize := measure(true)
+			results[mode.name] = allocationResult{maximum: maximum, oversize: oversize}
+			t.Logf("mode=%s maximum=%d_bytes/op oversized=%d_bytes/op", mode.name, maximum, oversize)
+		})
+	}
+	baseline := results["cache statement"]
+	for name, result := range results {
+		if result.maximum > baseline.maximum+jobs.MaxPayloadBytes/2 {
+			t.Errorf("mode %s adds a payload-sized maximum-row allocation: baseline=%d mode=%d", name, baseline.maximum, result.maximum)
+		}
+		if result.oversize > baseline.oversize+jobs.MaxPayloadBytes/2 {
+			t.Errorf("mode %s allocates a decoded oversized payload: baseline=%d mode=%d", name, baseline.oversize, result.oversize)
+		}
+	}
+}
+
+func TestPostgreSQLEnqueueTxRequiresReadCommitted(t *testing.T) {
+	pool, repository := integrationRepository(t)
+	ctx := context.Background()
+	for _, isolation := range []pgx.TxIsoLevel{pgx.RepeatableRead, pgx.Serializable} {
+		t.Run(string(isolation), func(t *testing.T) {
+			transaction, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: isolation})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer transaction.Rollback(ctx)
+			if _, _, err := repository.EnqueueTx(ctx, transaction, jobs.EnqueueRequest{Queue: "isolation", Kind: "rejected", MaxAttempts: 1}); !errors.Is(err, jobs.ErrInvalid) {
+				t.Fatalf("EnqueueTx(%s) = %v, want ErrInvalid", isolation, err)
+			}
+			var count int
+			if err := transaction.QueryRow(ctx, "SELECT count(*) FROM public.gotth_jobs WHERE queue = 'isolation'").Scan(&count); err != nil || count != 0 {
+				t.Fatalf("rejected transaction rows = %d, %v", count, err)
+			}
+		})
+	}
+	transaction, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.ReadCommitted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback(ctx)
+	if _, created, err := repository.EnqueueTx(ctx, transaction, jobs.EnqueueRequest{Queue: "isolation", Kind: "accepted", MaxAttempts: 1}); err != nil || !created {
+		t.Fatalf("EnqueueTx(read committed) = (created=%t, %v)", created, err)
+	}
 }
 
 func TestPostgreSQLEnqueueIdempotencyAndConsumerRollback(t *testing.T) {

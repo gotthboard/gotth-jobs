@@ -11,6 +11,8 @@ import (
 
 // Store is the exact lease lifecycle required by Worker. PostgreSQL satisfies
 // it; test doubles can model handler and shutdown behavior without a database.
+// Complete and Fail must preserve any produced Job when returning
+// ErrCommitOutcomeUnknown so Worker can expose it for reconciliation.
 type Store interface {
 	Claim(context.Context, ClaimRequest) (Job, error)
 	Heartbeat(context.Context, Lease, time.Duration) error
@@ -40,7 +42,8 @@ var (
 )
 
 // Run claims and handles one job at a time until ctx ends or a store/lease
-// failure makes continued operation dishonest.
+// failure makes continued operation dishonest. Unknown acknowledgement commit
+// outcomes return LeaseReconciliationError and are never retried implicitly.
 //
 // Complexity: for c claim cycles and total handler/database work H, time
 // O(c)+H, Omega(1), with no finite tight bound because ctx controls lifetime;
@@ -98,8 +101,8 @@ func validateClaimedAttempt(job Job, queue, workerID string) error {
 	return nil
 }
 
-// validate rejects configurations that could busy-loop, outlive their lease,
-// or omit a required execution boundary.
+// validate rejects configurations that could busy-loop, omit the explicit
+// half-lease renewal budget, or omit a required execution boundary.
 //
 // Complexity: for queue bytes q and worker bytes w, time O(q+w), Omega(q),
 // tight Theta(q+w); auxiliary space O(1), Omega(1), tight Theta(1).
@@ -110,8 +113,8 @@ func (worker Worker) validate() error {
 	if err := validateClaim(ClaimRequest{Queue: worker.Queue, Worker: worker.WorkerID, LeaseDuration: worker.LeaseDuration}); err != nil {
 		return err
 	}
-	if worker.HeartbeatInterval <= 0 || worker.HeartbeatInterval >= worker.LeaseDuration {
-		return fmt.Errorf("%w: heartbeat interval must be positive and shorter than the lease", ErrInvalid)
+	if worker.HeartbeatInterval <= 0 || worker.HeartbeatInterval > worker.LeaseDuration/2 {
+		return fmt.Errorf("%w: heartbeat interval must be positive and no more than half the lease", ErrInvalid)
 	}
 	if worker.PollInterval <= 0 || worker.PollInterval > time.Minute {
 		return fmt.Errorf("%w: poll interval must be between zero and one minute", ErrInvalid)
@@ -159,14 +162,20 @@ func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 		if errors.Is(heartbeatErr, ErrCanceled) {
 			return nil
 		}
+		if errors.Is(heartbeatErr, ErrCommitOutcomeUnknown) {
+			return &LeaseReconciliationError{job: job, lease: job.Lease, err: heartbeatErr}
+		}
 		return fmt.Errorf("heartbeat worker job: %w", heartbeatErr)
 	}
 	if handlerErr == nil {
-		_, err := worker.Store.Complete(ctx, job.Lease)
+		completed, err := worker.Store.Complete(ctx, job.Lease)
 		if errors.Is(err, ErrCanceled) {
 			return nil
 		}
 		if err != nil {
+			if errors.Is(err, ErrCommitOutcomeUnknown) {
+				return &LeaseReconciliationError{job: completed, lease: job.Lease, err: err}
+			}
 			return fmt.Errorf("complete worker job: %w", err)
 		}
 		return nil
@@ -181,7 +190,7 @@ func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 			return err
 		}
 	}
-	_, err := worker.Store.Fail(ctx, job.Lease, Failure{
+	failed, err := worker.Store.Fail(ctx, job.Lease, Failure{
 		Message: boundedFailure(handlerErr), RetryAfter: delay,
 		Permanent: permanent,
 	})
@@ -189,6 +198,9 @@ func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 		return nil
 	}
 	if err != nil {
+		if errors.Is(err, ErrCommitOutcomeUnknown) {
+			return &LeaseReconciliationError{job: failed, lease: job.Lease, err: err}
+		}
 		return fmt.Errorf("fail worker job: %w", err)
 	}
 	return nil

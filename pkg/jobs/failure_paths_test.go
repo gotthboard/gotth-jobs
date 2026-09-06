@@ -87,7 +87,7 @@ func TestStoredJobValidationStateAttemptBoundaries(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			job := Job{
 				ID: "0123456789abcdef0123456789abcdef", Queue: "default", Kind: "send",
-				State: test.state, Attempts: test.attempts, MaxAttempts: 3,
+				Payload: []byte{}, State: test.state, Attempts: test.attempts, MaxAttempts: 3,
 				AvailableAt: now, CreatedAt: now, UpdatedAt: now,
 			}
 			switch test.state {

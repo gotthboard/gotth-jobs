@@ -24,6 +24,10 @@ effect the handler already performed.
 
 Heartbeat returns only an error and PostgreSQL returns one fixed-size success
 scalar; no job envelope or payload is sent back on a successful lease renewal.
+Worker heartbeat intervals must be positive and no greater than half the
+lease. That reserves scheduler and database round-trip margin before expiry;
+it cannot guarantee renewal across arbitrary process, host, or database
+pauses.
 
 ## Boundary
 
@@ -35,8 +39,11 @@ backups, retention, payload encryption, authorization, job meaning, and the
 decision to enqueue work.
 
 Consumers that need atomic domain mutation plus enqueue call `EnqueueTx` on
-their existing `pgx.Tx`. The library does not pretend that enqueueing after a
-separate domain commit is reliable.
+their existing Read Committed `pgx.Tx`. `EnqueueTx` inspects that isolation
+before insertion and rejects Repeatable Read or Serializable transactions. It
+never commits, rolls back, or retries the caller transaction; consumers that
+retry must retry their whole domain transaction. The library does not pretend
+that enqueueing after a separate domain commit is reliable.
 
 An idempotency conflict reads the stored fingerprint and complete job from one
 row in one statement snapshot. A key-share lock retains that row identity
@@ -51,6 +58,19 @@ handled until the committed state and exact token are confirmed.
 `Worker.Run` exposes the same value through `ClaimReconciliationError`, found
 with `errors.As`; `ReconciliationJob` is likewise reconciliation-only and the
 error text never includes the lease token.
+
+Unknown Heartbeat, Complete, or Fail commit outcomes are exposed through
+`LeaseReconciliationError`. `ReconciliationJob` and `ReconciliationLease`
+identify the affected acknowledgement for durable inspection only. The type
+unwraps the original error, omits the job ID and lease token from `Error()`,
+and does not authorize an implicit acknowledgement retry.
+
+Every query that returns a job overrides the connection default with pgx
+`DescribeExec` and requests binary results for every job-column OID. This
+preserves the bounded scanner and full timestamp-range contracts even when a
+pool defaults to Exec or SimpleProtocol, at the disclosed cost of two protocol
+round trips for each such statement. Stored rows with SQL NULL payloads or
+missing/invalid timestamps are rejected.
 
 ## Limits
 

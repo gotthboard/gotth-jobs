@@ -43,7 +43,11 @@ func (row stubRow) Scan(destinations ...any) error {
 		case *int64:
 			*target = value.(int64)
 		case *time.Time:
-			*target = value.(time.Time)
+			if value == nil {
+				*target = time.Time{}
+			} else {
+				*target = value.(time.Time)
+			}
 		case **string:
 			if value == nil {
 				*target = nil
@@ -67,21 +71,36 @@ func (row stubRow) Scan(destinations ...any) error {
 
 type stubTx struct {
 	pgx.Tx
-	rows        []pgx.Row
-	queryRow    func(string, ...any) pgx.Row
-	statements  []string
-	arguments   [][]any
-	commitErr   error
-	rollbackErr error
-	commits     int
-	rollbacks   int
+	rows         []pgx.Row
+	queryRow     func(string, ...any) pgx.Row
+	statements   []string
+	arguments    [][]any
+	queryOptions [][]any
+	commitErr    error
+	rollbackErr  error
+	commits      int
+	rollbacks    int
+	isolation    string
+	isolationErr error
 }
 
 func (tx *stubTx) QueryRow(_ context.Context, statement string, arguments ...any) pgx.Row {
+	options, sqlArguments := splitPGXQueryOptions(arguments)
 	tx.statements = append(tx.statements, statement)
-	tx.arguments = append(tx.arguments, append([]any(nil), arguments...))
+	tx.arguments = append(tx.arguments, append([]any(nil), sqlArguments...))
+	tx.queryOptions = append(tx.queryOptions, options)
+	if statement == transactionIsolationSQL {
+		if tx.isolationErr != nil {
+			return stubRow{err: tx.isolationErr}
+		}
+		isolation := tx.isolation
+		if isolation == "" {
+			isolation = string(pgx.ReadCommitted)
+		}
+		return stubRow{values: []any{isolation}}
+	}
 	if tx.queryRow != nil {
-		return tx.queryRow(statement, arguments...)
+		return tx.queryRow(statement, sqlArguments...)
 	}
 	if len(tx.rows) == 0 {
 		return stubRow{err: errors.New("unexpected query")}
@@ -109,6 +128,7 @@ type stubDatabase struct {
 	directRows     []pgx.Row
 	statements     []string
 	queryArguments [][]any
+	queryOptions   [][]any
 	beginOptions   []pgx.TxOptions
 }
 
@@ -118,14 +138,18 @@ func (database *stubDatabase) BeginTx(_ context.Context, options pgx.TxOptions) 
 }
 
 func (database *stubDatabase) Query(_ context.Context, statement string, arguments ...any) (pgx.Rows, error) {
+	options, sqlArguments := splitPGXQueryOptions(arguments)
 	database.statements = append(database.statements, statement)
-	database.queryArguments = append(database.queryArguments, append([]any(nil), arguments...))
+	database.queryArguments = append(database.queryArguments, append([]any(nil), sqlArguments...))
+	database.queryOptions = append(database.queryOptions, options)
 	return database.rows, database.queryErr
 }
 
 func (database *stubDatabase) QueryRow(_ context.Context, statement string, arguments ...any) pgx.Row {
+	options, sqlArguments := splitPGXQueryOptions(arguments)
 	database.statements = append(database.statements, statement)
-	database.queryArguments = append(database.queryArguments, append([]any(nil), arguments...))
+	database.queryArguments = append(database.queryArguments, append([]any(nil), sqlArguments...))
+	database.queryOptions = append(database.queryOptions, options)
 	if len(database.directRows) == 0 {
 		return stubRow{err: errors.New("unexpected query row")}
 	}
@@ -134,16 +158,87 @@ func (database *stubDatabase) QueryRow(_ context.Context, statement string, argu
 	return row
 }
 
+func splitPGXQueryOptions(arguments []any) ([]any, []any) {
+	var options []any
+	for len(arguments) > 0 {
+		switch arguments[0].(type) {
+		case pgx.QueryExecMode, pgx.QueryResultFormatsByOID:
+			options = append(options, arguments[0])
+			arguments = arguments[1:]
+		default:
+			return options, arguments
+		}
+	}
+	return options, arguments
+}
+
+func assertJobQueryOptions(t *testing.T, options []any) {
+	t.Helper()
+	if len(options) != 2 || options[0] != pgx.QueryExecModeDescribeExec {
+		t.Fatalf("job query options = %#v", options)
+	}
+	formats, ok := options[1].(pgx.QueryResultFormatsByOID)
+	wantOIDs := []uint32{pgtype.TextOID, pgtype.ByteaOID, pgtype.Int4OID, pgtype.TimestamptzOID}
+	if !ok || len(formats) != len(wantOIDs) {
+		t.Fatalf("job result formats = %#v", options[1])
+	}
+	for _, oid := range wantOIDs {
+		if formats[oid] != pgx.BinaryFormatCode {
+			t.Fatalf("job result format for OID %d = %d, want binary", oid, formats[oid])
+		}
+	}
+}
+
 func jobRow(id string, request EnqueueRequest, state State) stubRow {
 	now := time.Unix(1_900_000_000, 0).UTC()
+	availableAt := request.AvailableAt
+	if availableAt.IsZero() {
+		availableAt = now
+	}
+	payload := request.Payload
+	if payload == nil {
+		payload = []byte{}
+	}
 	var key any
 	if request.IdempotencyKey != "" {
 		key = request.IdempotencyKey
 	}
 	return stubRow{values: []any{
-		id, request.Queue, request.Kind, request.Payload, key, string(state), 0,
-		request.MaxAttempts, request.AvailableAt, now, now, nil, nil, nil, "", nil,
+		id, request.Queue, request.Kind, payload, key, string(state), 0,
+		request.MaxAttempts, availableAt, now, now, nil, nil, nil, "", nil,
 	}}
+}
+
+func TestEnqueueTxRejectsNonReadCommittedIsolationBeforeInsert(t *testing.T) {
+	request := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), MaxAttempts: 1}
+	inserted := false
+	tx := &stubTx{isolation: string(pgx.RepeatableRead)}
+	tx.queryRow = func(statement string, _ ...any) pgx.Row {
+		inserted = true
+		return jobRow("0123456789abcdef0123456789abcdef", request, StatePending)
+	}
+	repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
+
+	if _, _, err := repository.EnqueueTx(context.Background(), tx, request); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("EnqueueTx(repeatable read) = %v, want ErrInvalid", err)
+	}
+	if inserted {
+		t.Fatal("EnqueueTx inserted before rejecting transaction isolation")
+	}
+}
+
+func TestEnqueueTxReturnsIsolationInspectionFailureBeforeInsert(t *testing.T) {
+	failure := errors.New("isolation read failed")
+	tx := &stubTx{isolationErr: failure}
+	repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
+	request := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), MaxAttempts: 1}
+
+	if _, _, err := repository.EnqueueTx(context.Background(), tx, request); !errors.Is(err, failure) {
+		t.Fatalf("EnqueueTx(isolation failure) = %v", err)
+	}
+	if len(tx.statements) != 1 || tx.statements[0] != transactionIsolationSQL {
+		t.Fatalf("EnqueueTx issued statements %#v", tx.statements)
+	}
 }
 
 func idempotentJobRow(fingerprint []byte, row stubRow) stubRow {
@@ -170,6 +265,7 @@ func TestEnqueueCommitsCreatedJobAndCopiesPayload(t *testing.T) {
 	if len(tx.arguments) != 1 || tx.arguments[0][0] == "" {
 		t.Fatalf("insert arguments missing generated ID: %+v", tx.arguments)
 	}
+	assertJobQueryOptions(t, tx.queryOptions[0])
 	if len(database.beginOptions) != 1 || database.beginOptions[0].IsoLevel != pgx.ReadCommitted || database.beginOptions[0].AccessMode != pgx.ReadWrite {
 		t.Fatalf("transaction options = %+v", database.beginOptions)
 	}
@@ -207,6 +303,9 @@ func TestEnqueueIdempotentDuplicateAndConflict(t *testing.T) {
 			}
 			if test.wantErr != nil && tx.commits != 0 {
 				t.Fatalf("conflict committed %d times", tx.commits)
+			}
+			for _, options := range tx.queryOptions {
+				assertJobQueryOptions(t, options)
 			}
 		})
 	}

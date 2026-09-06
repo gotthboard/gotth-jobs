@@ -60,3 +60,12 @@ state. The repair at exact source `389915b` uses an explicit normal-completion
 flag for every panic unwind and constant classified text for unknown state.
 Expected-red, exact-source race, repeat, allocation, and coverage evidence are
 retained. Fresh final reviews remain orchestrator-owned.
+
+The twelfth independent report rejected candidate `2ef420f`: Worker checked
+`ErrNoJob` or `ErrCanceled` before a joined unknown commit outcome, and the
+Judge 10 evidence placed `source.bundle` under the wrong artifact root. The
+repair at exact source `27bbaa9` gives unknown outcome immediate precedence for
+Claim, Complete, and Fail, retaining typed reconciliation identity when a
+handle exists and never polling or continuing. Exact-source race, repeat, and
+coverage evidence is retained, and the prior bundle path is corrected to
+`389915b/source.bundle`. Fresh final reviews remain orchestrator-owned.

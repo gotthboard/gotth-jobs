@@ -6,6 +6,50 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 10:14 CDT - Prioritize unknown Worker outcomes
+
+Implementation source: `27bbaa962e1d7d65e2395a5bb212e92ea6e6d667`
+
+Affected files:
+
+- Worker Claim, Complete, and Fail error classification
+- joined-sentinel custom-Store regressions
+- runtime, verification, coverage, and workflow evidence
+
+Explanation:
+
+Worker now classifies `ErrCommitOutcomeUnknown` before `ErrNoJob` from Claim
+and before `ErrCanceled` from Complete or Fail, including when a custom Store
+joins both identities. A nonzero Claim and acknowledgement results retain their
+existing typed reconciliation values; a zero Claim result returns the unknown
+error without polling. No unknown outcome is silently retried or treated as a
+routine cancellation.
+
+The Judge 10 artifact inventory root is also corrected: its inventory is
+rooted at `.../gotth-jobs/389915b`, its evidence files are under `artifacts/`,
+and its source bundle is exactly `389915b/source.bundle`.
+
+Verification:
+
+- expected-red joined unknown/no-job and unknown/canceled custom-Store tests
+  against candidate `2ef420f`
+- constrained local focused repeats, full package, vet, format, and
+  integration-tag compilation
+- exact detached-source format, vet, unit, build, full race, 50 focused race
+  repeats, 100 focused repeats, focused coverage, and 97.7% statement coverage
+  on `development`
+- every changed precedence branch is covered
+
+Risks / non-goals:
+
+- Joined errors still expose all constituent identities through `errors.Is`;
+  precedence controls Worker action and return shape, not error traversal.
+- PostgreSQL, external-consumer, fuzz, graph, and performance gates were not
+  rerun because no SQL, API, parser, or measured success path changed.
+- Two fresh independent reviews remain orchestrator-owned. This repair does not
+  claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 09:11 CDT - Harden Worker panic and state rejection
 
 Implementation source: `389915b6c4f27b1a2d5912de369a80b918c394fb`

@@ -70,7 +70,9 @@ and lease token may be used to reconcile the durable row. The job must not be
 handled until the committed state and exact token are confirmed.
 `Worker.Run` exposes the same value through `ClaimReconciliationError`, found
 with `errors.As`; `ReconciliationJob` is likewise reconciliation-only and the
-error text never includes the lease token.
+error text never includes the lease token. Worker classifies an unknown Claim
+outcome before `ErrNoJob`, including when both identities are joined; without
+a nonzero job it returns the unknown error and does not poll.
 
 Unknown Heartbeat, Complete, or Fail commit outcomes are exposed through
 `LeaseReconciliationError`. `ReconciliationJob` and `ReconciliationLease`
@@ -79,7 +81,8 @@ unwraps the original error, omits the job ID and lease token from `Error()`,
 and does not authorize an implicit acknowledgement retry. After joining the
 heartbeat, Worker gives an unknown commit outcome precedence over parent
 cancellation and handler-teardown cancellation so reconciliation is never
-silently replaced by a less specific cancellation result.
+silently replaced by a less specific cancellation result. Complete and Fail
+apply the same precedence before `ErrCanceled`, including joined errors.
 
 Every query that returns a job overrides the connection default with pgx
 `DescribeExec` and requests binary results for every job-column OID. This

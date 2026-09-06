@@ -102,12 +102,16 @@ for reconciliation and must not be handled before durable confirmation.
 When the same result reaches `Worker.Run`, it is returned in a
 `ClaimReconciliationError`; the original error remains traversable, the
 handler does not run, and the error string omits the secret token.
+Unknown Claim outcome is classified before `ErrNoJob`, including joined
+identities. A nonzero result retains its typed reconciliation handle; a zero
+result returns the unknown error without polling.
 Unknown Heartbeat, Complete, and Fail commit outcomes become
 `LeaseReconciliationError`; the original error remains traversable, exact job
 and lease values are available only through reconciliation accessors, no
 identity or token appears in `Error()`, and Worker does not retry. Immediately
 after heartbeat join, this classification outranks both parent cancellation
-and cancellation caused by local handler teardown.
+and cancellation caused by local handler teardown. Complete and Fail apply the
+same precedence before `ErrCanceled`, including joined identities.
 
 Handler return closes the heartbeat stop signal and cancels the per-attempt
 context before the worker joins the heartbeat goroutine. Context cancellation

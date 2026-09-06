@@ -80,7 +80,8 @@ returned job only for reconciliation. Its text omits job identity and the
 secret token, and Worker never retries the acknowledgement implicitly. An
 unknown Heartbeat commit result takes precedence immediately after the
 heartbeat join, including when the same error also matches parent or local
-teardown cancellation.
+teardown cancellation. Complete and Fail likewise classify an unknown outcome
+before `ErrCanceled`, preserving their returned job and the affected lease.
 
 ## Worker
 
@@ -106,7 +107,9 @@ the untrusted state is not quoted or copied into diagnostics.
 If Claim returns a nonzero job with `ErrCommitOutcomeUnknown`, `Worker.Run`
 returns `ClaimReconciliationError` without invoking the handler. The typed
 error unwraps the original failure and exposes the unconfirmed job only for
-durable ID/token reconciliation; its text omits every job field.
+durable ID/token reconciliation; its text omits every job field. Unknown Claim
+outcome takes precedence over `ErrNoJob` even when the identities are joined;
+without a nonzero job, Worker returns the unknown error without polling.
 
 Worker accepts a heartbeat interval no greater than half the lease duration.
 The remaining half is an explicit budget for post-Claim startup, scheduling,

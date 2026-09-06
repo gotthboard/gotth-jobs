@@ -43,7 +43,9 @@ reaching pgx.
 - `Worker.Run`: serial claim/handle/heartbeat/acknowledgement loop that cancels
   and joins the per-attempt heartbeat after handler return. A nonzero
   commit-unknown Claim becomes `ClaimReconciliationError`; the handler does not
-  run and `ReconciliationJob` is not execution authorization. Handler failure
+  run and `ReconciliationJob` is not execution authorization. Unknown outcome
+  is classified before `ErrNoJob` or acknowledgement `ErrCanceled`, including
+  joined identities; Worker neither polls nor continues. Handler failure
   text is obtained once, source-capped before normalization, sanitized to
   valid NUL-free UTF-8, and ellipsis-truncated within `MaxFailureBytes`. An
   explicit normal-return flag classifies every panic unwind, including a nil
@@ -64,7 +66,8 @@ error while keeping its reconciliation job out of `Error()` text.
 `LeaseReconciliationError` performs the same secret-safe traversal for
 commit-unknown Heartbeat, Complete, and Fail results and exposes the affected
 job and lease only through reconciliation accessors. Worker never retries
-those acknowledgements implicitly.
+those acknowledgements implicitly. Without a nonzero Claim result, Worker
+returns the unknown error without manufacturing a reconciliation handle.
 
 ## PostgreSQL decoding
 

@@ -33,10 +33,13 @@
 ## Correctness-relevant limits
 
 Application-level byte and count limits are fixed in the README and validated
-at every exported boundary. PostgreSQL row-lock cardinality has no configured
-hard count for this library because claim locks exactly one row. The migration
-uses no extension, dynamic identifier, server-side function, session setting,
-or global state.
+at every exported boundary. One `Claim` can lock and update up to 100 expired,
+exhausted running rows and can independently lock and update at most one
+disjoint eligible candidate row. Those locks remain until the short claim
+transaction ends, so the statement can hold at most 101 row locks and can
+perform 100 cleanup writes even when it returns no job. The eligible result
+remains limited to one job. The migration uses no extension, dynamic
+identifier, server-side function, session setting, or global state.
 
 Boundary verification covers every library limit at limit-1, limit, limit+1,
 and materially beyond where representable. Timestamp coverage applies the same

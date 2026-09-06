@@ -230,18 +230,23 @@ func (worker Worker) heartbeat(ctx context.Context, stop <-chan struct{}, lease 
 	}
 }
 
-// callHandler contains a panic within the current attempt without copying the
-// panic value into persisted failure text.
+// callHandler contains every panic unwind within the current attempt without
+// inspecting or copying the panic value. The completion flag distinguishes a
+// normal nil return from panic(nil) when legacy panicnil behavior is enabled.
 //
 // Complexity: delegated handler time and space dominate; local time and space
 // are tight Theta(1).
 func callHandler(ctx context.Context, handler Handler, job Job) (err error) {
+	completed := false
 	defer func() {
-		if recover() != nil {
+		if !completed {
+			_ = recover()
 			err = errHandlerPanicked
 		}
 	}()
-	return handler(ctx, job)
+	err = handler(ctx, job)
+	completed = true
+	return err
 }
 
 // boundedFailure converts a bounded prefix of arbitrary error text into valid

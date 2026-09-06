@@ -244,6 +244,37 @@ func TestWorkerAttemptClassifiesRetryPermanentAndPanic(t *testing.T) {
 	}
 }
 
+func TestWorkerPanicNilFailsWithLegacyRuntimeMode(t *testing.T) {
+	t.Setenv("GODEBUG", "panicnil=1")
+	job := claimedJob(1)
+	completeCalls := 0
+	failCalls := 0
+	var got Failure
+	store := &stubStore{
+		heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
+		complete: func(context.Context, Lease) (Job, error) {
+			completeCalls++
+			return Job{State: StateSucceeded}, nil
+		},
+		fail: func(_ context.Context, _ Lease, failure Failure) (Job, error) {
+			failCalls++
+			got = failure
+			return Job{State: StatePending}, nil
+		},
+	}
+	worker := validWorker(store, func(context.Context, Job) error { panic(nil) })
+
+	if err := worker.runAttempt(context.Background(), job); err != nil {
+		t.Fatalf("runAttempt(panic(nil)) = %v", err)
+	}
+	if completeCalls != 0 || failCalls != 1 {
+		t.Fatalf("panic(nil) acknowledgements = complete %d, fail %d", completeCalls, failCalls)
+	}
+	if got.Message != errHandlerPanicked.Error() || got.Permanent || got.RetryAfter != time.Second {
+		t.Fatalf("panic(nil) failure = %+v", got)
+	}
+}
+
 func TestWorkerHeartbeatCancellationCancelsCooperativeHandler(t *testing.T) {
 	job := claimedJob(1)
 	handlerCanceled := make(chan struct{})
@@ -539,6 +570,42 @@ func TestWorkerRejectsInvalidClaimedAttempt(t *testing.T) {
 	worker := validWorker(store, func(context.Context, Job) error { return nil })
 	if err := worker.Run(context.Background()); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Run(invalid claim) = %v", err)
+	}
+}
+
+func TestWorkerRejectsLargeUnknownCustomStoreStateWithoutAllocation(t *testing.T) {
+	unknownState := strings.Repeat("x", 1<<20)
+	job := claimedJob(1)
+	job.State = State(unknownState)
+	handlerCalls := 0
+	store := &stubStore{claim: func(context.Context, ClaimRequest) (Job, error) {
+		return job, nil
+	}}
+	worker := validWorker(store, func(context.Context, Job) error {
+		handlerCalls++
+		return nil
+	})
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	err := worker.Run(context.Background())
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(store)
+
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("Run(large unknown state) = %v, want ErrInvalid", err)
+	}
+	if handlerCalls != 0 {
+		t.Fatalf("handler calls = %d, want 0", handlerCalls)
+	}
+	allocated := after.TotalAlloc - before.TotalAlloc
+	t.Logf("state=%d_bytes allocated=%d_bytes error=%d_bytes", len(unknownState), allocated, len(err.Error()))
+	if allocated >= uint64(len(unknownState))/2 {
+		t.Fatalf("Run(large unknown state) allocated %d bytes for %d-byte state", allocated, len(unknownState))
+	}
+	if len(err.Error()) > 256 || strings.Contains(err.Error(), unknownState[:256]) {
+		t.Fatalf("Run(large unknown state) exposed untrusted state: %q", err)
 	}
 }
 

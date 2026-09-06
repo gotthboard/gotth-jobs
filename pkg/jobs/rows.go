@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -25,6 +26,8 @@ var jobResultFormats = pgx.QueryResultFormatsByOID{
 	pgtype.Int4OID:        pgx.BinaryFormatCode,
 	pgtype.TimestamptzOID: pgx.BinaryFormatCode,
 }
+
+var errStoredJobUnknownState = errors.New("stored job has unknown state")
 
 // jobQueryArguments forces pgx to describe each job-returning statement and
 // decode every job-column type from its binary result format regardless of the
@@ -252,7 +255,7 @@ func validateStoredJob(job Job) error {
 			return fmt.Errorf("stored running job has invalid lease state")
 		}
 	default:
-		return fmt.Errorf("stored job has unknown state %q", job.State)
+		return errStoredJobUnknownState
 	}
 	terminal := job.State == StateSucceeded || job.State == StateDead || job.State == StateCanceled
 	if terminal == job.FinishedAt.IsZero() {

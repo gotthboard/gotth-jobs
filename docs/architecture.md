@@ -89,8 +89,9 @@ the active handler. After the handler returns, the worker signals heartbeat
 stop and cancels its attempt context before joining; context cancellation from
 that local teardown does not suppress acknowledgement. Parent cancellation and
 genuine heartbeat failures remain visible. Losing or canceling the lease
-cancels the handler context. Handler panic becomes a bounded retryable failure
-instead of terminating the worker process. Shutdown stops heartbeats and
+cancels the handler context. Every handler panic unwind, including a nil panic
+under legacy runtime behavior, becomes a bounded retryable failure instead of
+terminating the worker process or completing the job. Shutdown stops heartbeats and
 leaves the lease to expire; it does not falsely record a handler failure.
 For a handler error, Worker calls `Error()` once, caps the returned source
 before normalization, sanitizes only that bounded prefix, and reserves the
@@ -98,6 +99,9 @@ ellipsis inside `MaxFailureBytes`. Invalid UTF-8 expansion and NUL redaction
 therefore consume bounded library time and space regardless of the complete
 source length; work performed by the consumer's `Error()` method remains
 outside that bound.
+Worker validates jobs returned by custom Store implementations before invoking
+the handler. Unknown state is reported through a constant classified error;
+the untrusted state is not quoted or copied into diagnostics.
 
 If Claim returns a nonzero job with `ErrCommitOutcomeUnknown`, `Worker.Run`
 returns `ClaimReconciliationError` without invoking the handler. The typed

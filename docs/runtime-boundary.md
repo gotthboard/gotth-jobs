@@ -126,6 +126,13 @@ than `MaxFailureBytes`. The consumer controls any cost incurred inside
 `Error()`; all subsequent library work and allocation are bounded independently
 of the full returned string.
 
+The exported Worker boundary treats jobs returned by a custom `Store` as
+untrusted. An unknown state is rejected as `ErrInvalid` before handler
+execution using constant diagnostic text, so library work and allocation do
+not grow with that state. Handler completion is tracked explicitly: every
+panic unwind, even `panic(nil)` with `GODEBUG=panicnil=1`, becomes a retryable
+`Fail` acknowledgement and never a successful `Complete` acknowledgement.
+
 Integration schema reset is separately guarded from connection selection. It
 requires the exact opt-in
 `GOTTH_JOBS_ALLOW_DESTRUCTIVE_TEST_DATABASE_RESET=true`, then asks PostgreSQL

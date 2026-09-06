@@ -6,6 +6,48 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 09:11 CDT - Harden Worker panic and state rejection
+
+Implementation source: `389915b6c4f27b1a2d5912de369a80b918c394fb`
+
+Affected files:
+
+- Worker handler-panic classification and complexity comment
+- stored-job unknown-state validation
+- focused panic and custom-Store allocation regressions
+- runtime, performance, verification, coverage, and workflow evidence
+
+Explanation:
+
+Worker now uses an explicit normal-return flag around handler invocation, so
+every panic unwind becomes a retryable failure even when
+`GODEBUG=panicnil=1` makes `recover()` return nil. A panicked attempt can no
+longer call Complete. Jobs returned by custom Store implementations now reject
+unknown state with constant classified text, without quoting or copying the
+untrusted state into an error before the handler boundary.
+
+Verification:
+
+- expected-red legacy `panic(nil)` acknowledgement and 1 MiB unknown-state
+  allocation regressions against candidate `a6900a1`
+- constrained local focused repeats, full package, vet, and integration-tag
+  compilation
+- exact detached-source format, vet, unit, build, full race, 50 affected race
+  repeats, 20 allocation samples, 100 focused repeats, and 97.5% statement
+  coverage on `development`
+- `callHandler` and `validateStoredJob` are 100% covered
+
+Risks / non-goals:
+
+- The constant state diagnostic intentionally omits a custom Store's untrusted
+  value; callers retain `errors.Is(err, ErrInvalid)` classification.
+- No fuzz target exercises handler unwinding or custom stored jobs, so fuzz was
+  not rerun. PostgreSQL, external-consumer, graph, and database performance
+  gates remain ancestor evidence because no SQL, API, or query path changed.
+- Two fresh independent reviews remain orchestrator-owned. This repair does
+  not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 08:25 CDT - Bound Worker failure normalization
 
 Implementation source: `b54c0fcabb5f7f43e3268749f75a59fbfd27413d`

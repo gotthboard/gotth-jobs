@@ -3,147 +3,131 @@
 ## Identity and disposition
 
 - Baseline: `874212b762571cd88322867872e458af0d9e0435`.
-- Judge-9-rejected candidate:
-  `8213b6d8a14cd95545d95d2119d1bd5bd231c9e5`.
-- Independent report: `/tmp/gotth-jobs-independent-judge-9.md`.
+- Judge-10-rejected candidate:
+  `a6900a151c2fecf8eae21d845f82880643f81d28`.
+- Independent report: `/tmp/gotth-jobs-independent-judge-10.md`.
 - Exact implementation repair source:
-  `b54c0fcabb5f7f43e3268749f75a59fbfd27413d`.
-- Source tree: `1159e048b57ce06eb23bc55d2d987deadaa94f4d`.
+  `389915b6c4f27b1a2d5912de369a80b918c394fb`.
+- Source tree: `81511f58ac262b3adcfb5ce3a77d381f84288116`.
 - Source bundle SHA-256:
-  `e93e80b32f4a22e56b8e281d205f2cdf798278c849a899805299e86e0fee173d`.
+  `04a057763025faafc8c4426c343400be5851de25855dcc39815bd140923db709`.
 - Branch: `feature/reusable-v0-admission` in the assigned isolated worktree.
 - State: active. This repair worker does not claim independent final
   admission.
 - No tag, push, merge, release, pull request, deployment, remote change, live
   database, or external consumer was changed.
 
-Judge 9 found one implementation defect. `boundedFailure` called
-`strings.ToValidUTF8` and `strings.ReplaceAll` over the complete unbounded
-handler error string before truncation. Invalid UTF-8 and NUL input therefore
-caused source-sized or larger library allocation and complete-source scanning.
+Judge 10 found two Worker-boundary defects. Under
+`GODEBUG=panicnil=1`, `recover()` returns nil for `panic(nil)`, so the prior
+non-nil check incorrectly acknowledged the attempt through Complete. A custom
+Store could also return a preallocated large unknown `Job.State`; `%q` and the
+outer validation wrapper copied that complete untrusted value into errors.
 The report found no additional material defect. Historical reviews do not
 admit this repair; two fresh orchestrator-owned reviews remain required.
 
 ## Repair and contract
 
-`boundedFailure` calls `err.Error()` exactly once. After that delegated call
-returns, it selects at most a `MaxFailureBytes`-scale byte prefix before any
-normalization. A source known to exceed the final limit is capped with the
-three-byte ellipsis already reserved. Only that bounded prefix reaches
-`strings.ToValidUTF8` and NUL replacement.
+`callHandler` now sets an explicit completion flag only after the handler
+returns normally. Its deferred function recovers every unwind without
+inspecting or formatting the panic value, then returns the existing bounded
+`errHandlerPanicked`. This includes `panic(nil)` in legacy runtime mode and
+preserves the retryable Fail path; Complete is never called for an unwind.
 
-If invalid UTF-8 or NUL replacement expands a within-limit source, output is
-UTF-8-boundary-truncated with the same reserved ellipsis. The result remains no
-larger than `MaxFailureBytes`, valid UTF-8, NUL-free, and uses U+FFFD for both
-invalid input and NUL redaction. Library time after `Error()` is
-Theta(1+min(n, MaxFailureBytes)); worst-case auxiliary allocation is
-O(MaxFailureBytes), independent of the full source length. Work performed
-inside a custom consumer `Error()` method is outside the library bound.
-
-The public API, Store contract, PostgreSQL behavior, fencing, retries, and
-at-least-once delivery contract are unchanged.
+`validateStoredJob` now returns a package-owned constant error for unknown
+state. `validateClaimedAttempt` retains the public `ErrInvalid`
+classification, but neither layer interpolates the state. The audit confirmed
+that the only other state formatting sites receive scanner-bounded values, so
+they were not changed. Public API and at-least-once behavior are unchanged.
 
 ## Expected-red evidence
 
-The allocation test was added before production changes and used preallocated
-1 MiB valid, alternating-invalid, and NUL-containing strings. It also asserts
-one `Error()` call, final byte limit, valid UTF-8, no NUL, replacement-rune
-redaction, and ellipsis behavior.
+Both regressions were added before production changes. The controlled test
+sets `GODEBUG=panicnil=1`, invokes `panic(nil)`, and asserts one Fail plus zero
+Complete calls. The exported `Worker.Run` test uses a custom Store returning a
+preallocated 1 MiB unknown state, then asserts `ErrInvalid`, no handler call,
+bounded error text, and no source-sized library allocation.
 
-Against rejected candidate `8213b6d` with only the retained test patch, the
-valid control passed while invalid UTF-8 allocated 8,736,880 bytes and NUL
-input allocated 2,101,280 bytes. The focused test failed exactly those two
-allocation checks.
+Against rejected candidate `a6900a1` with only the retained test patch,
+`panic(nil)` made one Complete and zero Fail calls. The large-state path
+allocated 5,284,888 bytes and returned a 1,048,665-byte error. The focused
+command failed exactly those two checks.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `expected-red-tests.patch` | `28351cdf9189859a7db7c41593c8784695fd5e2a6130eb62d7a833f23550fbf5` |
-| `expected-red-allocation.log` | `e37b2fa858eff27f85ec4b3d93e78868575d5dda01a532c7bb9eb39826f26f34` |
+| `expected-red-tests.patch` | `c182739bd7921ea2f742fdaaef182951466aa95e45f698d5fa78374f3603e263` |
+| `expected-red.log` | `c7dd19b77bd9edadbb05ad623473d649b7c1af2749998c720d9840aea83f75f5` |
 
 ## Local checks
 
-Agenthost work remained lightweight. Focused output/allocation tests passed for
-ten repeats, the complete package passed once, integration-tag compilation
-passed without running integration, and vet, formatting, and
-`git diff --check` passed. Go commands used `GOMAXPROCS=2` and
-`go test -p=1`.
+Agenthost work remained lightweight. The two focused tests passed for ten
+repeats, the complete package passed once, integration-tag compilation passed
+without running integration, and vet, formatting, and `git diff --check`
+passed. Go commands used `GOMAXPROCS=2` and `go test -p=1`.
 
 ## Exact-source development record
 
 The complete source bundle was cloned detached at:
 
-`/home/linus/.cache/openclaw-code-index/gotth-jobs/b54c0fc/source`
+`/home/linus/.cache/openclaw-code-index/gotth-jobs/389915b/source`
 
 The retained successful runner writes both streams directly to its transcript
 and enables `set -x`. It records literal commands, cwd, Go 1.26.6 and host
-toolchains, source bundle hash, exact HEAD/tree, clean pre/post status,
-packages, regexes, options, counts, timing, and an explicit completion
+toolchains, `GOMAXPROCS=4`, source bundle hash, exact HEAD/tree, clean pre/post
+status, packages, regexes, options, counts, timing, and an explicit completion
 sentinel. This document intentionally does not reconstruct those commands.
 
-Exact source passed format, vet, unit, build, full race, 50 focused race
-repeats, 20 verbose allocation runs, a 100-repeat Bash-timed focused workload,
-unit coverage, and the 10-second bounded-failure fuzz target. The 100-repeat
-test process took 1.94s real, 3.48s user, and 1.45s system; it includes
-compilation, fixture construction, forced garbage collection, and test
-overhead, so it is not claimed as function latency.
+Exact source passed format, vet, unit, build, full race, 50 race-instrumented
+repeats of the two repairs plus adjacent Worker paths, 20 verbose allocation
+runs, 100 focused repeats, and unit coverage. The 100-repeat test process took
+0.67s real, 0.80s user, and 0.35s system; it includes compilation, fixture
+construction, forced garbage collection, and test overhead, so it is not
+claimed as function latency.
 
-The 20-run allocation samples were stable:
+Across the retained 20 runs, rejection of a preallocated 1,048,576-byte state
+allocated 648-1,088 bytes and returned an 86-byte error. Unit statement
+coverage is 97.5%; `callHandler` and `validateStoredJob` are 100% covered.
+Exact unrelated residual blocks are retained in `coverage-gaps.log`; there is
+no changed-path gap.
 
-| Preallocated source | Source bytes | Library bytes allocated | Result bytes |
-| --- | ---: | ---: | ---: |
-| valid ASCII | 1,048,576 | 4,096 | 4,096 |
-| alternating invalid UTF-8 / ASCII | 1,048,576 | 29,952 | 4,095 |
-| ASCII / NUL | 1,048,576 | 12,288-12,320 | 4,096 |
-
-Unit statement coverage is 97.5%, and `boundedFailure` is 100% covered. Exact
-unrelated residual blocks are retained in `coverage-gaps.log`; there is no
-changed-path gap.
-
-The first runner invocation failed before any verification gate because the
-host does not provide `/usr/bin/time`. Its runner and transcript are retained.
-The corrected runner used Bash `time -p` and completed every stated gate.
+The first runner invocation failed before cloning or running any gate because
+`git bundle verify` lacked a repository context. Its runner and transcript are
+retained. The corrected runner cloned first, verified the same bundle from the
+detached repository, and completed every stated gate.
 
 ## Proportional gate scope
 
-No PostgreSQL test was run. The repair modifies one private, local helper after
-a handler failure and changes no SQL, database transaction, Store method,
-public API, or successful Worker path. The canonical PostgreSQL correctness and
-performance workloads do not exercise handler failure normalization; rerunning
-them would not validate this defect.
+No existing fuzz target reaches handler invocation or stored jobs returned by
+a custom Store. `FuzzEnvelopeValidationNeverPanics` covers enqueue input and
+`FuzzBoundedFailureIsValid` covers handler error normalization; neither repair
+changed those paths, so fuzz was not rerun.
 
-The standalone external-consumer fixture was not rerun because no public
-contract changed. Prior PostgreSQL and consumer results remain ancestor
-evidence only and are not rebound to `b54c0fc`.
-
-Exact-source Graphify 0.9.32 code-only extraction reported 316 nodes, 835
-edges, and 17 communities. Diagnostics reported zero unverified nodes,
-non-object edges, missing/dangling endpoints, self-loops, exact duplicates, or
-same-endpoint groups. The optional SQL parser was unavailable; no SQL graph
-coverage is claimed.
+No PostgreSQL test or performance matrix was run because the repair changes no
+SQL, transaction, scanner, PostgreSQL-backed successful path, or Store method.
+The standalone external-consumer fixture was not rerun because no exported
+identifier or signature changed. Graph extraction was not rerun because no
+call edge or SQL statement changed. Prior PostgreSQL, consumer, performance,
+fuzz, and graph results remain ancestor evidence only and are not rebound to
+`389915b`.
 
 ## Artifact inventory
 
 Artifact root:
 
-`/home/linus/.cache/openclaw-code-index/gotth-jobs/b54c0fc/artifacts`
+`/home/linus/.cache/openclaw-code-index/gotth-jobs/389915b/artifacts`
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `artifact-inventory.sha256` | `24f10937efae782af13f2c0473bb74dd9743446a18a01f1edf0605df9b084cc6` |
-| `expected-red-tests.patch` | `28351cdf9189859a7db7c41593c8784695fd5e2a6130eb62d7a833f23550fbf5` |
-| `expected-red-allocation.log` | `e37b2fa858eff27f85ec4b3d93e78868575d5dda01a532c7bb9eb39826f26f34` |
-| `run-verification.sh` | `a1cc08f116e75f0df63cb36ecf48f48355dd99db5e6326eb54d6e80df9a20c2a` |
-| `verification-transcript.log` | `2bf429cfd652172c8f5d1c44f88294af3cc1e4f8430060823050718d0c950056` |
-| `coverage.out` | `4d0361bb9a1a84f6e3bec6073ed77c0441dbeca21c97a4832265a6b657ae62bb` |
-| `coverage-functions.log` | `98d5b2568a589730eb060d3040b92053de2ffb9ff4e2a33d04912986b06dd978` |
+| `artifact-inventory.sha256` | `b535df026a6d98d9c4806137dad6cbbf67fd74c99971e7ab8d811c47e20e4308` |
+| `coverage-functions.log` | `4071304ae580184d89d7bcfa0319b167c05f8c770f894d0dbbfaa7e560966afa` |
 | `coverage-gaps.log` | `5da31787a31ba378672bbc875bb402771f1e369891d20243eeb38d68334bcd05` |
-| `run-verification.failed.sh` | `4b27d0d8e15cfebe9e6d9c6bbeb2965312cfc9bd9be60a8f2c907f0ec335f850` |
-| `verification-transcript.failed.log` | `7daeeed1dd4a9615f7f4b3d4df75befd2b78edab34752ccf23fbde69a69ccd65` |
-| `run-graph-verification.sh` | `bc639bcacc31127a82581635d69bafef51f6fe71c160234d703e715ed82c2dbb` |
-| `graph-verification-transcript.log` | `95f9905cbb44dbcf4c1a1336a61a832d04f5e508e12ae0177a7fa88725190588` |
-| `graph/graphify-out/graph.json` | `8dc8f55e0645dbae1afbf97ed09e54723f5a7464be1e1afee23f3431d633b465` |
-| `graph-diagnose.json` | `b06b596182bb2a635b438ff83e5dabba5b4daea6aa7dc50c2aa0196acedade5f` |
-| `source.bundle` | `e93e80b32f4a22e56b8e281d205f2cdf798278c849a899805299e86e0fee173d` |
+| `coverage.out` | `08fccd3e0ffb4df21441f209e1a6b08f9dec12beef6b7439c94a86c237145160` |
+| `expected-red-tests.patch` | `c182739bd7921ea2f742fdaaef182951466aa95e45f698d5fa78374f3603e263` |
+| `expected-red.log` | `c7dd19b77bd9edadbb05ad623473d649b7c1af2749998c720d9840aea83f75f5` |
+| `run-verification.failed.sh` | `9f8af217c3dba1482f477139520b41986e2e8f0f0ee6b7fc7e0404180ea10c58` |
+| `verification-transcript.failed.log` | `3dce45e72916b9c38aaa4880da95367c0114b8e7c8b882f85830de1ab478c8db` |
+| `run-verification.sh` | `0448d46b9c988f1a0cd91376df4412614e5caa7a60c0d9dd8b7205c8ec3648c1` |
+| `verification-transcript.log` | `9eae244433eaeb42a0777c02fa3ca1374b154d20b2de3d9abdbebbffd0ba7932` |
+| `source.bundle` | `04a057763025faafc8c4426c343400be5851de25855dcc39815bd140923db709` |
 
 ## Remaining gate
 

@@ -184,3 +184,11 @@ The PostgreSQL performance matrix was not rerun: every canonical workload has
 a successful handler, while this repair changes only local processing after a
 handler returns an error. No SQL, Store call, successful Worker path, or public
 API changed. No speedup or latency guarantee is claimed.
+
+The Judge 10 repair changes only local Worker panic classification and
+custom-Store state rejection. Exact-source development samples allocated
+648-1,088 bytes while rejecting a preallocated 1 MiB unknown state, compared
+with 5,284,888 bytes in the expected-red implementation. A 100-repeat focused
+test process completed in 0.67s real time; this includes test and runtime
+overhead and is not a function-latency claim. PostgreSQL performance was not
+rerun because no SQL or PostgreSQL-backed success path changed.

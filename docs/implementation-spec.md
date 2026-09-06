@@ -45,7 +45,11 @@ reaching pgx.
   commit-unknown Claim becomes `ClaimReconciliationError`; the handler does not
   run and `ReconciliationJob` is not execution authorization. Handler failure
   text is obtained once, source-capped before normalization, sanitized to
-  valid NUL-free UTF-8, and ellipsis-truncated within `MaxFailureBytes`.
+  valid NUL-free UTF-8, and ellipsis-truncated within `MaxFailureBytes`. An
+  explicit normal-return flag classifies every panic unwind, including a nil
+  panic in legacy runtime mode, as retryable failure. Custom-Store jobs are
+  validated before execution, and unknown state returns a constant classified
+  error without interpolating the untrusted value.
 - `Permanent`: mark a handler error as non-retryable without changing it for
   `errors.Is`/`errors.As` traversal.
 

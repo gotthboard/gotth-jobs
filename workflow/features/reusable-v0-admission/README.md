@@ -52,3 +52,11 @@ the ellipsis within the final limit. Expected-red and exact-source allocation,
 race, coverage, fuzz, focused performance, and graph evidence are retained;
 PostgreSQL was not rerun because no database path changed. Fresh final reviews
 remain orchestrator-owned.
+
+The tenth independent review rejected candidate `a6900a1` because legacy
+`panicnil=1` behavior allowed `panic(nil)` to be completed as success and a
+custom Store could induce source-sized allocation by returning a large unknown
+state. The repair at exact source `389915b` uses an explicit normal-completion
+flag for every panic unwind and constant classified text for unknown state.
+Expected-red, exact-source race, repeat, allocation, and coverage evidence are
+retained. Fresh final reviews remain orchestrator-owned.

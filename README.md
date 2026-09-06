@@ -36,6 +36,12 @@ reserves room for an ellipsis when truncating, and sends at most
 custom `Error()` method is consumer-owned; Worker work after it returns is
 independent of the full error length.
 
+Every handler panic unwind, including `panic(nil)` under Go's legacy
+`panicnil=1` mode, is acknowledged through `Fail` as a bounded retryable
+failure and is never completed as success. Jobs returned by a custom `Store`
+are validated before handler execution; an unknown state produces a constant
+classified error without copying that untrusted state into diagnostics.
+
 ## Boundary
 
 The first durable backend is PostgreSQL 17 using `FOR UPDATE SKIP LOCKED`, which

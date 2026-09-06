@@ -42,8 +42,8 @@ var (
 )
 
 // Run claims and handles one job at a time until ctx ends or a store/lease
-// failure makes continued operation dishonest. Unknown acknowledgement commit
-// outcomes return LeaseReconciliationError and are never retried implicitly.
+// failure makes continued operation dishonest. Unknown commit outcomes take
+// precedence over routine sentinel identities and are never retried implicitly.
 //
 // Complexity: for c claim cycles and total handler/database work H, time
 // O(c)+H, Omega(1), with no finite tight bound because ctx controls lifetime;
@@ -65,6 +65,12 @@ func (worker Worker) Run(ctx context.Context) error {
 			Queue: worker.Queue, Worker: worker.WorkerID,
 			LeaseDuration: worker.LeaseDuration,
 		})
+		if errors.Is(err, ErrCommitOutcomeUnknown) {
+			if job.ID != "" {
+				return &ClaimReconciliationError{job: job, err: err}
+			}
+			return fmt.Errorf("claim worker job: %w", err)
+		}
 		if errors.Is(err, ErrNoJob) {
 			if err := waitContext(ctx, worker.PollInterval); err != nil {
 				return err
@@ -72,9 +78,6 @@ func (worker Worker) Run(ctx context.Context) error {
 			continue
 		}
 		if err != nil {
-			if errors.Is(err, ErrCommitOutcomeUnknown) && job.ID != "" {
-				return &ClaimReconciliationError{job: job, err: err}
-			}
 			return fmt.Errorf("claim worker job: %w", err)
 		}
 		if err := validateClaimedAttempt(job, worker.Queue, worker.WorkerID); err != nil {
@@ -170,13 +173,13 @@ func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 	}
 	if handlerErr == nil {
 		completed, err := worker.Store.Complete(ctx, job.Lease)
+		if errors.Is(err, ErrCommitOutcomeUnknown) {
+			return &LeaseReconciliationError{job: completed, lease: job.Lease, err: err}
+		}
 		if errors.Is(err, ErrCanceled) {
 			return nil
 		}
 		if err != nil {
-			if errors.Is(err, ErrCommitOutcomeUnknown) {
-				return &LeaseReconciliationError{job: completed, lease: job.Lease, err: err}
-			}
 			return fmt.Errorf("complete worker job: %w", err)
 		}
 		return nil
@@ -195,13 +198,13 @@ func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 		Message: boundedFailure(handlerErr), RetryAfter: delay,
 		Permanent: permanent,
 	})
+	if errors.Is(err, ErrCommitOutcomeUnknown) {
+		return &LeaseReconciliationError{job: failed, lease: job.Lease, err: err}
+	}
 	if errors.Is(err, ErrCanceled) {
 		return nil
 	}
 	if err != nil {
-		if errors.Is(err, ErrCommitOutcomeUnknown) {
-			return &LeaseReconciliationError{job: failed, lease: job.Lease, err: err}
-		}
 		return fmt.Errorf("fail worker job: %w", err)
 	}
 	return nil

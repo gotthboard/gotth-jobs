@@ -123,6 +123,55 @@ func TestWorkerRunPreservesUnknownClaimOutcomeForReconciliation(t *testing.T) {
 	}
 }
 
+func TestWorkerUnknownClaimOutcomePrecedesNoJob(t *testing.T) {
+	job := claimedJob(1)
+	unknown := errors.Join(ErrCommitOutcomeUnknown, ErrNoJob)
+	continued := errors.New("worker continued after unknown claim outcome")
+	tests := []struct {
+		name      string
+		result    Job
+		wantTyped bool
+	}{
+		{name: "with reconciliation handle", result: job, wantTyped: true},
+		{name: "without reconciliation handle"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := 0
+			handlerCalls := 0
+			store := &stubStore{claim: func(context.Context, ClaimRequest) (Job, error) {
+				claims++
+				if claims > 1 {
+					return Job{}, continued
+				}
+				return test.result, unknown
+			}}
+			worker := validWorker(store, func(context.Context, Job) error {
+				handlerCalls++
+				return nil
+			})
+
+			err := worker.Run(context.Background())
+			if !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, unknown) {
+				t.Fatalf("Run() = %v, want joined unknown outcome", err)
+			}
+			if errors.Is(err, continued) || claims != 1 || handlerCalls != 0 {
+				t.Fatalf("Run() continued: err=%v claims=%d handler_calls=%d", err, claims, handlerCalls)
+			}
+			var reconciliation *ClaimReconciliationError
+			if errors.As(err, &reconciliation) != test.wantTyped {
+				t.Fatalf("Run() typed reconciliation = %t, want %t", reconciliation != nil, test.wantTyped)
+			}
+			if test.wantTyped {
+				got := reconciliation.ReconciliationJob()
+				if got.ID != job.ID || got.Lease.Token != job.Lease.Token {
+					t.Fatalf("reconciliation job ID/token = %q/%q", got.ID, got.Lease.Token)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkerPreservesUnknownAcknowledgementOutcomes(t *testing.T) {
 	job := claimedJob(1)
 	unknown := errors.Join(ErrCommitOutcomeUnknown, errors.New("connection lost after commit"))
@@ -204,6 +253,88 @@ func TestWorkerPreservesUnknownAcknowledgementOutcomes(t *testing.T) {
 			}
 			if calls != 1 {
 				t.Fatalf("acknowledgement calls = %d, want 1", calls)
+			}
+		})
+	}
+}
+
+func TestWorkerUnknownAcknowledgementOutcomePrecedesCanceled(t *testing.T) {
+	job := claimedJob(1)
+	unknown := errors.Join(ErrCommitOutcomeUnknown, ErrCanceled)
+	continued := errors.New("worker continued after unknown acknowledgement")
+	tests := []struct {
+		name      string
+		handler   Handler
+		configure func(*stubStore, Job, *int)
+		wantState State
+	}{
+		{
+			name: "complete", wantState: StateSucceeded,
+			handler: func(context.Context, Job) error { return nil },
+			configure: func(store *stubStore, result Job, calls *int) {
+				store.complete = func(context.Context, Lease) (Job, error) {
+					*calls++
+					return result, unknown
+				}
+			},
+		},
+		{
+			name: "fail", wantState: StatePending,
+			handler: func(context.Context, Job) error { return errors.New("handler failure") },
+			configure: func(store *stubStore, result Job, calls *int) {
+				store.fail = func(context.Context, Lease, Failure) (Job, error) {
+					*calls++
+					return result, unknown
+				}
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			claims := 0
+			handlerCalls := 0
+			acknowledgementCalls := 0
+			result := job
+			result.State = test.wantState
+			result.Payload = []byte(test.name + " reconciliation result")
+			store := &stubStore{
+				claim: func(context.Context, ClaimRequest) (Job, error) {
+					claims++
+					if claims > 1 {
+						return Job{}, continued
+					}
+					return job, nil
+				},
+				heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
+				complete:  func(context.Context, Lease) (Job, error) { return Job{}, errors.New("unexpected complete") },
+				fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, errors.New("unexpected fail") },
+			}
+			test.configure(store, result, &acknowledgementCalls)
+			worker := validWorker(store, func(ctx context.Context, got Job) error {
+				handlerCalls++
+				return test.handler(ctx, got)
+			})
+
+			err := worker.Run(context.Background())
+			if !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, unknown) {
+				t.Fatalf("Run() = %v, want joined unknown outcome", err)
+			}
+			if errors.Is(err, continued) || claims != 1 || handlerCalls != 1 || acknowledgementCalls != 1 {
+				t.Fatalf("Run() continued: err=%v claims=%d handler_calls=%d acknowledgement_calls=%d", err, claims, handlerCalls, acknowledgementCalls)
+			}
+			var reconciliation *LeaseReconciliationError
+			if !errors.As(err, &reconciliation) {
+				t.Fatalf("Run() error %T has no lease reconciliation accessors", err)
+			}
+			got := reconciliation.ReconciliationJob()
+			if got.ID != result.ID || got.State != result.State || got.Lease.Token != result.Lease.Token || string(got.Payload) != string(result.Payload) {
+				t.Fatalf("reconciliation job = %+v, want %+v", got, result)
+			}
+			if reconciliation.ReconciliationLease() != job.Lease {
+				t.Fatalf("reconciliation lease = %+v, want %+v", reconciliation.ReconciliationLease(), job.Lease)
+			}
+			if strings.Contains(err.Error(), job.ID) || strings.Contains(err.Error(), job.Lease.Token) {
+				t.Fatalf("reconciliation error leaks identity or token: %q", err)
 			}
 		})
 	}

@@ -87,6 +87,20 @@ func validateEnqueue(request EnqueueRequest) error {
 	return nil
 }
 
+// prepareEnqueue validates caller-controlled lengths before isolating the
+// bounded payload from later mutation.
+//
+// Complexity: for q queue, k kind, p payload, and i key bytes, time is
+// O(q+k+p+i), Omega(q+k+i), with tight Theta(q+k+p+i) for valid requests;
+// auxiliary space is O(p), Omega(1), tight Theta(p) for valid requests and
+// Theta(1) for rejected requests.
+func prepareEnqueue(request EnqueueRequest) (EnqueueRequest, error) {
+	if err := validateEnqueue(request); err != nil {
+		return EnqueueRequest{}, err
+	}
+	return cloneEnqueue(request), nil
+}
+
 // isPostgreSQLTimestamp reports whether value is a nonzero UTC timestamp that
 // the pinned PostgreSQL and pgx boundary can represent without truncation or
 // wraparound.

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +61,7 @@ func (row stubRow) Scan(destinations ...any) error {
 type stubTx struct {
 	pgx.Tx
 	rows        []pgx.Row
+	queryRow    func(string, ...any) pgx.Row
 	statements  []string
 	arguments   [][]any
 	commitErr   error
@@ -70,6 +73,9 @@ type stubTx struct {
 func (tx *stubTx) QueryRow(_ context.Context, statement string, arguments ...any) pgx.Row {
 	tx.statements = append(tx.statements, statement)
 	tx.arguments = append(tx.arguments, append([]any(nil), arguments...))
+	if tx.queryRow != nil {
+		return tx.queryRow(statement, arguments...)
+	}
 	if len(tx.rows) == 0 {
 		return stubRow{err: errors.New("unexpected query")}
 	}
@@ -133,6 +139,10 @@ func jobRow(id string, request EnqueueRequest, state State) stubRow {
 	}}
 }
 
+func idempotentJobRow(fingerprint []byte, row stubRow) stubRow {
+	return stubRow{values: append([]any{fingerprint}, row.values...)}
+}
+
 func TestEnqueueCommitsCreatedJobAndCopiesPayload(t *testing.T) {
 	request := EnqueueRequest{Queue: "default", Kind: "send", Payload: []byte("payload"), MaxAttempts: 3, AvailableAt: time.Unix(1_900_000_000, 0).UTC()}
 	tx := &stubTx{rows: []pgx.Row{jobRow("0123456789abcdef0123456789abcdef", request, StatePending)}}
@@ -172,8 +182,10 @@ func TestEnqueueIdempotentDuplicateAndConflict(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			tx := &stubTx{rows: []pgx.Row{
 				stubRow{err: pgx.ErrNoRows},
-				stubRow{values: []any{test.fingerprint}},
-				jobRow("0123456789abcdef0123456789abcdef", request, StatePending),
+				idempotentJobRow(
+					test.fingerprint,
+					jobRow("0123456789abcdef0123456789abcdef", request, StatePending),
+				),
 			}}
 			repository, err := NewPostgreSQL(&stubDatabase{tx: tx})
 			if err != nil {
@@ -190,6 +202,110 @@ func TestEnqueueIdempotentDuplicateAndConflict(t *testing.T) {
 				t.Fatalf("conflict committed %d times", tx.commits)
 			}
 		})
+	}
+}
+
+func TestEnqueueIdempotentFallbackCannotAuthenticateThenReturnReplacement(t *testing.T) {
+	requestA := EnqueueRequest{
+		Queue: "default", Kind: "send-a", Payload: []byte("payload-a"),
+		IdempotencyKey: "replaceable-key", MaxAttempts: 3,
+		AvailableAt: time.Unix(1_900_000_000, 0).UTC(),
+	}
+	requestB := requestA
+	requestB.Kind = "send-b"
+	requestB.Payload = []byte("payload-b")
+	fingerprintA := requestFingerprint(requestA)
+	replaced := false
+	tx := &stubTx{}
+	tx.queryRow = func(statement string, _ ...any) pgx.Row {
+		switch {
+		case strings.HasPrefix(statement, "INSERT"):
+			return stubRow{err: pgx.ErrNoRows}
+		case strings.HasPrefix(statement, "SELECT request_fingerprint FROM"):
+			// The old two-query fallback permits replacement after authenticating A.
+			replaced = true
+			return stubRow{values: []any{fingerprintA[:]}}
+		case strings.HasPrefix(statement, "SELECT id"):
+			if !replaced {
+				t.Fatal("replacement read occurred without the fingerprint interleaving point")
+			}
+			return jobRow("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", requestB, StatePending)
+		case strings.HasPrefix(statement, "SELECT request_fingerprint, id"):
+			return idempotentJobRow(
+				fingerprintA[:],
+				jobRow("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", requestA, StatePending),
+			)
+		default:
+			t.Fatalf("unexpected statement: %s", statement)
+			return stubRow{err: errors.New("unexpected statement")}
+		}
+	}
+	repository, err := NewPostgreSQL(&stubDatabase{tx: tx})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	job, created, err := repository.Enqueue(context.Background(), requestA)
+	if err != nil || created {
+		t.Fatalf("Enqueue() = (%+v, %t, %v)", job, created, err)
+	}
+	if job.ID != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || job.Kind != requestA.Kind || string(job.Payload) != string(requestA.Payload) {
+		t.Fatalf("Enqueue() authenticated A but returned replacement: %+v", job)
+	}
+	if len(tx.statements) != 2 || !strings.Contains(tx.statements[1], "FOR KEY SHARE") {
+		t.Fatalf("fallback statements = %q, want one retaining SELECT", tx.statements)
+	}
+}
+
+func TestScanJobWithFingerprintRejectsMalformedCombinedRow(t *testing.T) {
+	request := EnqueueRequest{Queue: "default", Kind: "send", MaxAttempts: 1}
+	fingerprint := requestFingerprint(request)
+	stored, job, err := scanJobWithFingerprint(idempotentJobRow(
+		fingerprint[:],
+		jobRow("invalid-id", request, StatePending),
+	))
+	if err == nil || stored != nil || job.ID != "" {
+		t.Fatalf("scanJobWithFingerprint(malformed) = (%x, %+v, %v)", stored, job, err)
+	}
+}
+
+func TestEnqueueRejectsOversizedPayloadBeforeCopyOrBegin(t *testing.T) {
+	payload := make([]byte, MaxPayloadBytes+1)
+	tx := &stubTx{}
+	database := &stubDatabase{tx: tx}
+	repository, err := NewPostgreSQL(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := EnqueueRequest{Queue: "default", Kind: "send", Payload: payload, MaxAttempts: 1}
+
+	runtime.GC()
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	_, _, gotErr := repository.Enqueue(context.Background(), request)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(gotErr, ErrInvalid) {
+		t.Fatalf("Enqueue(oversized payload) = %v", gotErr)
+	}
+	if len(database.beginOptions) != 0 {
+		t.Fatalf("Enqueue(oversized payload) began %d transactions", len(database.beginOptions))
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated >= uint64(len(payload))/2 {
+		t.Fatalf("Enqueue(oversized payload) allocated %d bytes for %d-byte input", allocated, len(payload))
+	}
+
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, _, gotErr = repository.EnqueueTx(context.Background(), tx, request)
+	runtime.ReadMemStats(&after)
+	if !errors.Is(gotErr, ErrInvalid) {
+		t.Fatalf("EnqueueTx(oversized payload) = %v", gotErr)
+	}
+	if len(tx.statements) != 0 {
+		t.Fatalf("EnqueueTx(oversized payload) issued %d queries", len(tx.statements))
+	}
+	if allocated := after.TotalAlloc - before.TotalAlloc; allocated >= uint64(len(payload))/2 {
+		t.Fatalf("EnqueueTx(oversized payload) allocated %d bytes for %d-byte input", allocated, len(payload))
 	}
 }
 

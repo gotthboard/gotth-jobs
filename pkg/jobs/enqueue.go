@@ -18,11 +18,9 @@ COALESCE($8::timestamptz, clock_timestamp()))
 ON CONFLICT (queue, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
 RETURNING ` + jobColumns
 
-const fingerprintSQL = `SELECT request_fingerprint FROM public.gotth_jobs
-WHERE queue = $1 AND idempotency_key = $2`
-
-const idempotentJobSQL = `SELECT ` + jobColumns + ` FROM public.gotth_jobs
-WHERE queue = $1 AND idempotency_key = $2`
+const idempotentJobSQL = `SELECT request_fingerprint, ` + jobColumns + ` FROM public.gotth_jobs
+WHERE queue = $1 AND idempotency_key = $2
+FOR KEY SHARE`
 
 type enqueueResult struct {
 	job     Job
@@ -33,15 +31,24 @@ type enqueueResult struct {
 // duplicate returns the existing job with created=false. Commit failure wraps
 // ErrCommitOutcomeUnknown and is never retried.
 //
-// Complexity: for q queue, k kind, p payload, and i key bytes, local time and
-// auxiliary space are Theta(q+k+p+i); database cost is one transaction with
-// one insert, plus two indexed reads only on an idempotency conflict.
+// Complexity: for q queue, k kind, p payload, and i key bytes, local time is
+// Theta(q+k+p+i) and auxiliary space is Theta(p) for valid requests; rejected
+// oversized payloads use O(q+k+i) time and Theta(1) auxiliary space. Database
+// cost is one transaction with one insert, plus one indexed retaining read
+// only on an idempotency conflict.
 func (repository *PostgreSQL) Enqueue(ctx context.Context, request EnqueueRequest) (Job, bool, error) {
 	if repository == nil || repository.database == nil {
 		return Job{}, false, fmt.Errorf("%w: repository is required", ErrInvalid)
 	}
+	if ctx == nil {
+		return Job{}, false, fmt.Errorf("%w: context is required", ErrInvalid)
+	}
+	prepared, err := prepareEnqueue(request)
+	if err != nil {
+		return Job{}, false, err
+	}
 	result, err := transact(ctx, repository.database, func(transaction pgx.Tx) (enqueueResult, error) {
-		job, created, enqueueErr := repository.EnqueueTx(ctx, transaction, request)
+		job, created, enqueueErr := repository.enqueuePrepared(ctx, transaction, prepared)
 		return enqueueResult{job: job, created: created}, enqueueErr
 	})
 	return result.job, result.created, err
@@ -50,17 +57,30 @@ func (repository *PostgreSQL) Enqueue(ctx context.Context, request EnqueueReques
 // EnqueueTx inserts a job using the caller's existing transaction and never
 // commits or rolls it back. The caller owns commit-outcome reconciliation.
 //
-// Complexity: for q queue, k kind, p payload, and i key bytes, local time and
-// auxiliary space are Theta(q+k+p+i); database cost is one insert, plus two
-// indexed reads only on an idempotency conflict.
+// Complexity: for q queue, k kind, p payload, and i key bytes, local time is
+// Theta(q+k+p+i) and auxiliary space is Theta(p) for valid requests; rejected
+// oversized payloads use O(q+k+i) time and Theta(1) auxiliary space. Database
+// cost is one insert, plus one indexed retaining read only on an idempotency
+// conflict.
 func (repository *PostgreSQL) EnqueueTx(ctx context.Context, transaction pgx.Tx, request EnqueueRequest) (Job, bool, error) {
 	if repository == nil || repository.database == nil || ctx == nil || nilLike(transaction) {
 		return Job{}, false, fmt.Errorf("%w: repository, context, and transaction are required", ErrInvalid)
 	}
-	request = cloneEnqueue(request)
-	if err := validateEnqueue(request); err != nil {
+	prepared, err := prepareEnqueue(request)
+	if err != nil {
 		return Job{}, false, err
 	}
+	return repository.enqueuePrepared(ctx, transaction, prepared)
+}
+
+// enqueuePrepared executes the transaction-bound statements for a request
+// already validated and copied by the public entry point.
+//
+// Complexity: for q queue, k kind, and p payload bytes, local time is
+// Theta(q+k+p) for fingerprinting and scanning while auxiliary space is
+// Theta(p); database cost is one insert plus one indexed retaining read only
+// on an idempotency conflict.
+func (repository *PostgreSQL) enqueuePrepared(ctx context.Context, transaction pgx.Tx, request EnqueueRequest) (Job, bool, error) {
 	id, err := newJobID()
 	if err != nil {
 		return Job{}, false, err
@@ -80,16 +100,12 @@ func (repository *PostgreSQL) EnqueueTx(ctx context.Context, transaction pgx.Tx,
 		return Job{}, false, fmt.Errorf("insert job returned no row without an idempotency key")
 	}
 
-	var stored []byte
-	if err := transaction.QueryRow(ctx, fingerprintSQL, request.Queue, request.IdempotencyKey).Scan(&stored); err != nil {
-		return Job{}, false, fmt.Errorf("read idempotent job fingerprint: %w", err)
+	stored, job, err := scanJobWithFingerprint(transaction.QueryRow(ctx, idempotentJobSQL, request.Queue, request.IdempotencyKey))
+	if err != nil {
+		return Job{}, false, fmt.Errorf("read idempotent job: %w", err)
 	}
 	if len(stored) != len(fingerprint) || subtle.ConstantTimeCompare(stored, fingerprint[:]) != 1 {
 		return Job{}, false, ErrIdempotencyConflict
-	}
-	job, err = scanJob(transaction.QueryRow(ctx, idempotentJobSQL, request.Queue, request.IdempotencyKey))
-	if err != nil {
-		return Job{}, false, fmt.Errorf("read idempotent job: %w", err)
 	}
 	return job, false, nil
 }

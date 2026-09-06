@@ -87,6 +87,38 @@ func TestWorkerRunClaimsHandlesAndCompletes(t *testing.T) {
 	}
 }
 
+func TestWorkerRunPreservesUnknownClaimOutcomeForReconciliation(t *testing.T) {
+	job := claimedJob(1)
+	claimFailure := errors.Join(ErrCommitOutcomeUnknown, errors.New("commit connection lost"))
+	handled := false
+	store := &stubStore{claim: func(context.Context, ClaimRequest) (Job, error) {
+		return job, claimFailure
+	}}
+	worker := validWorker(store, func(context.Context, Job) error {
+		handled = true
+		return nil
+	})
+
+	err := worker.Run(context.Background())
+	if !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, claimFailure) {
+		t.Fatalf("Run() = %v, want original unknown-commit error", err)
+	}
+	var reconciliation *ClaimReconciliationError
+	if !errors.As(err, &reconciliation) {
+		t.Fatalf("Run() error %T does not expose reconciliation job", err)
+	}
+	got := reconciliation.ReconciliationJob()
+	if got.ID != job.ID || got.Lease.Token != job.Lease.Token {
+		t.Fatalf("reconciliation job ID/token = %q/%q", got.ID, got.Lease.Token)
+	}
+	if strings.Contains(err.Error(), job.Lease.Token) {
+		t.Fatal("Run() error text leaks lease token")
+	}
+	if handled {
+		t.Fatal("handler ran for an unconfirmed claim")
+	}
+}
+
 func TestWorkerAttemptClassifiesRetryPermanentAndPanic(t *testing.T) {
 	job := claimedJob(2)
 	tests := []struct {

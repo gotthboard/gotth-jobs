@@ -15,6 +15,40 @@ var (
 	ErrCommitOutcomeUnknown = errors.New("job transaction commit outcome unknown")
 )
 
+// ClaimReconciliationError reports that Worker.Run received a nonzero Claim
+// result whose commit outcome is unknown. The job is not authorization to run
+// its handler; it exists only to reconcile the durable ID and lease token.
+type ClaimReconciliationError struct {
+	job Job
+	err error
+}
+
+// Error deliberately omits all job fields, including the secret lease token.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func (err *ClaimReconciliationError) Error() string {
+	return "claim worker job commit outcome is unknown; reconciliation required"
+}
+
+// Unwrap preserves the original Claim error for errors.Is and errors.As.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func (err *ClaimReconciliationError) Unwrap() error {
+	return err.err
+}
+
+// ReconciliationJob returns the unconfirmed Claim result. Consumers may use
+// its ID and lease token only to inspect durable state; they must not handle
+// the job until that state and lease have been confirmed.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func (err *ClaimReconciliationError) ReconciliationJob() Job {
+	return err.job
+}
+
 type permanentError struct {
 	err error
 }

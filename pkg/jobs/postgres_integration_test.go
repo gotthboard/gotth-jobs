@@ -107,6 +107,85 @@ func TestPostgreSQLEnqueueIdempotencyAndConsumerRollback(t *testing.T) {
 	}
 }
 
+func TestPostgreSQLEnqueueIdempotentFallbackRetainsAuthenticatedRow(t *testing.T) {
+	pool, repository := integrationRepository(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	requestA := jobs.EnqueueRequest{
+		Queue: "retention", Kind: "send-a", Payload: []byte("payload-a"),
+		IdempotencyKey: "replaceable-key", MaxAttempts: 3,
+	}
+	created, wasCreated, err := repository.Enqueue(ctx, requestA)
+	if err != nil || !wasCreated {
+		t.Fatalf("Enqueue(create A) = (%+v, %t, %v)", created, wasCreated, err)
+	}
+
+	transaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback(context.Background())
+	duplicate, wasCreated, err := repository.EnqueueTx(ctx, transaction, requestA)
+	if err != nil || wasCreated || duplicate.ID != created.ID {
+		t.Fatalf("EnqueueTx(duplicate A) = (%+v, %t, %v)", duplicate, wasCreated, err)
+	}
+
+	deleter, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer deleter.Release()
+	const applicationName = "gotth-jobs-idempotency-retention"
+	if _, err := deleter.Exec(ctx, "SELECT set_config('application_name', $1, false)", applicationName); err != nil {
+		t.Fatal(err)
+	}
+	type deleteResult struct {
+		rows int64
+		err  error
+	}
+	deleteDone := make(chan deleteResult, 1)
+	go func() {
+		result, deleteErr := deleter.Exec(ctx, "DELETE FROM public.gotth_jobs WHERE id = $1", created.ID)
+		deleteDone <- deleteResult{rows: result.RowsAffected(), err: deleteErr}
+	}()
+
+	waiting := false
+	for !waiting {
+		select {
+		case result := <-deleteDone:
+			t.Fatalf("DELETE was not retained by duplicate fallback: rows=%d err=%v", result.rows, result.err)
+		default:
+		}
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (
+            SELECT 1 FROM pg_stat_activity
+            WHERE application_name = $1 AND state = 'active'
+              AND wait_event_type = 'Lock'
+        )`, applicationName).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if !waiting {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	deleted := <-deleteDone
+	if deleted.err != nil || deleted.rows != 1 {
+		t.Fatalf("DELETE after transaction end = rows=%d err=%v", deleted.rows, deleted.err)
+	}
+
+	requestB := requestA
+	requestB.Kind = "send-b"
+	requestB.Payload = []byte("payload-b")
+	if replacement, created, err := repository.Enqueue(ctx, requestB); err != nil || !created || replacement.ID == duplicate.ID {
+		t.Fatalf("Enqueue(replacement B) = (%+v, %t, %v)", replacement, created, err)
+	}
+	if _, _, err := repository.Enqueue(ctx, requestA); !errors.Is(err, jobs.ErrIdempotencyConflict) {
+		t.Fatalf("Enqueue(A after replacement) = %v, want ErrIdempotencyConflict", err)
+	}
+}
+
 func TestPostgreSQLEnqueueAvailabilityBoundaries(t *testing.T) {
 	_, repository := integrationRepository(t)
 	ctx := context.Background()

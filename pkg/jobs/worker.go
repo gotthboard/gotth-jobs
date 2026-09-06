@@ -68,6 +68,9 @@ func (worker Worker) Run(ctx context.Context) error {
 			continue
 		}
 		if err != nil {
+			if errors.Is(err, ErrCommitOutcomeUnknown) && job.ID != "" {
+				return &ClaimReconciliationError{job: job, err: err}
+			}
 			return fmt.Errorf("claim worker job: %w", err)
 		}
 		if err := validateClaimedAttempt(job, worker.Queue, worker.WorkerID); err != nil {

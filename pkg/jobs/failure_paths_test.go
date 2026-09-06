@@ -141,11 +141,7 @@ func TestEnqueueFailurePaths(t *testing.T) {
 	}{
 		{name: "insert", request: request, rows: []pgx.Row{stubRow{err: failure}}, want: "insert job"},
 		{name: "unexpected no row", request: request, rows: []pgx.Row{stubRow{err: pgx.ErrNoRows}}, want: "without an idempotency key"},
-		{name: "fingerprint read", request: EnqueueRequest{Queue: "default", Kind: "send", IdempotencyKey: "key", MaxAttempts: 1}, rows: []pgx.Row{stubRow{err: pgx.ErrNoRows}, stubRow{err: failure}}, want: "fingerprint"},
-		{name: "idempotent job read", request: EnqueueRequest{Queue: "default", Kind: "send", IdempotencyKey: "key", MaxAttempts: 1}, rows: func() []pgx.Row {
-			fingerprint := requestFingerprint(EnqueueRequest{Queue: "default", Kind: "send", IdempotencyKey: "key", MaxAttempts: 1})
-			return []pgx.Row{stubRow{err: pgx.ErrNoRows}, stubRow{values: []any{fingerprint[:]}}, stubRow{err: failure}}
-		}(), want: "read idempotent job"},
+		{name: "idempotent job read", request: EnqueueRequest{Queue: "default", Kind: "send", IdempotencyKey: "key", MaxAttempts: 1}, rows: []pgx.Row{stubRow{err: pgx.ErrNoRows}, stubRow{err: failure}}, want: "read idempotent job"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

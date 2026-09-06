@@ -2,6 +2,7 @@ package jobs_test
 
 import (
 	"context"
+	"errors"
 	"io/fs"
 	"time"
 
@@ -29,6 +30,10 @@ func compilePublicAPI(ctx context.Context, database jobs.Database, transaction p
 	_, _ = jobs.RetryPolicy{Initial: time.Second, Maximum: jobs.MaxRetryDelay}.Delay(1)
 	_ = jobs.Permanent(err)
 	_ = jobs.IsPermanent(err)
+	var reconciliation *jobs.ClaimReconciliationError
+	if errors.As(err, &reconciliation) {
+		_ = reconciliation.ReconciliationJob()
+	}
 	var migrations fs.FS = jobs.Migrations()
 	_ = migrations
 	_ = dead

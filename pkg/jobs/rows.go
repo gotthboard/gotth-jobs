@@ -25,16 +25,52 @@ job.lease_owner, job.lease_until, job.last_error, job.finished_at`
 // auxiliary space O(p), Omega(p), tight Theta(p); one delegated row scan is
 // required.
 func scanJob(row pgx.Row) (Job, error) {
+	return scanJobRow(row, nil)
+}
+
+// scanJobWithFingerprint converts a fingerprint and complete job selected
+// from one row and statement snapshot into copied public values.
+//
+// Complexity: for payload size p, time O(p), Omega(p), tight Theta(p);
+// auxiliary space O(p), Omega(p), tight Theta(p); one delegated row scan is
+// required.
+func scanJobWithFingerprint(row pgx.Row) ([]byte, Job, error) {
+	var fingerprint []byte
+	job, err := scanJobRow(row, &fingerprint)
+	if err != nil {
+		return nil, Job{}, err
+	}
+	return fingerprint, job, nil
+}
+
+// scanJobRow owns the shared decoding and validation for ordinary job rows
+// and idempotency rows with a leading fingerprint column.
+//
+// Complexity: for payload size p, time O(p), Omega(p), tight Theta(p);
+// auxiliary space O(p), Omega(p), tight Theta(p); one delegated row scan is
+// required.
+func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
 	var job Job
 	var state string
 	var key, token, owner *string
 	var leaseUntil, finishedAt *time.Time
-	if err := row.Scan(
-		&job.ID, &job.Queue, &job.Kind, &job.Payload, &key, &state,
-		&job.Attempts, &job.MaxAttempts, &job.AvailableAt, &job.CreatedAt,
-		&job.UpdatedAt, &token, &owner, &leaseUntil, &job.LastError,
-		&finishedAt,
-	); err != nil {
+	var err error
+	if fingerprint == nil {
+		err = row.Scan(
+			&job.ID, &job.Queue, &job.Kind, &job.Payload, &key, &state,
+			&job.Attempts, &job.MaxAttempts, &job.AvailableAt, &job.CreatedAt,
+			&job.UpdatedAt, &token, &owner, &leaseUntil, &job.LastError,
+			&finishedAt,
+		)
+	} else {
+		err = row.Scan(
+			fingerprint, &job.ID, &job.Queue, &job.Kind, &job.Payload, &key,
+			&state, &job.Attempts, &job.MaxAttempts, &job.AvailableAt,
+			&job.CreatedAt, &job.UpdatedAt, &token, &owner, &leaseUntil,
+			&job.LastError, &finishedAt,
+		)
+	}
+	if err != nil {
 		return Job{}, err
 	}
 	job.State = State(state)

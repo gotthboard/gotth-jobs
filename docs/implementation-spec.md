@@ -19,7 +19,8 @@ cursors use the same timestamp predicate before reaching pgx.
 - `Enqueue` / `EnqueueTx`: validate, copy, fingerprint, insert, or return an
   exact idempotent duplicate. Only `Enqueue` owns commit classification.
 - `Claim`: reap exhausted expired attempts and atomically claim one eligible
-  row with a fresh random token.
+  row with a fresh random token. A produced job returned with
+  `ErrCommitOutcomeUnknown` exposes its ID and token for reconciliation only.
 - `Heartbeat`: extend only the exact active, unexpired lease.
 - `Complete`: transition only the exact active, unexpired lease to succeeded.
 - `Fail`: move an exact lease to pending or dead according to explicit,
@@ -30,7 +31,8 @@ cursors use the same timestamp predicate before reaching pgx.
   finite PostgreSQL timestamp cursor.
 - `Redrive`: move exactly one dead job back to pending and reset attempts.
 - `RetryPolicy.Delay`: saturating exponential delay without overflow.
-- `Worker.Run`: serial claim/handle/heartbeat/acknowledgement loop.
+- `Worker.Run`: serial claim/handle/heartbeat/acknowledgement loop that cancels
+  and joins the per-attempt heartbeat after handler return.
 - `Permanent`: mark a handler error as non-retryable without changing it for
   `errors.Is`/`errors.As` traversal.
 

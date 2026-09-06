@@ -48,6 +48,27 @@ func TestClaimReturnsOneFencedAttempt(t *testing.T) {
 	}
 }
 
+func TestClaimPreservesFencingHandleOnUnknownCommit(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	token := strings.Repeat("ab", 32)
+	commitFailure := errors.New("connection lost after commit")
+	tx := &stubTx{
+		rows:      []pgx.Row{runningJobRow(id, token, 1)},
+		commitErr: commitFailure,
+	}
+	repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
+
+	job, err := repository.claimWithToken(context.Background(), ClaimRequest{
+		Queue: "default", Worker: "worker-1", LeaseDuration: time.Minute,
+	}, token)
+	if job.ID != id || job.Lease.JobID != id || job.Lease.Token != token {
+		t.Fatalf("claim reconciliation handle = %+v", job)
+	}
+	if !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, commitFailure) {
+		t.Fatalf("claim commit error = %v", err)
+	}
+}
+
 func TestClaimNoJobAndInputFailures(t *testing.T) {
 	tx := &stubTx{rows: []pgx.Row{stubRow{err: pgx.ErrNoRows}}}
 	repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})

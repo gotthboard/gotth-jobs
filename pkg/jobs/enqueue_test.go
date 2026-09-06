@@ -201,8 +201,9 @@ func TestEnqueueClassifiesCommitFailureAndEnqueueTxDoesNotCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := repository.Enqueue(context.Background(), request); !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, commitFailure) {
-		t.Fatalf("Enqueue(commit failure) = %v", err)
+	job, created, err := repository.Enqueue(context.Background(), request)
+	if job.ID != "0123456789abcdef0123456789abcdef" || !created || !errors.Is(err, ErrCommitOutcomeUnknown) || !errors.Is(err, commitFailure) {
+		t.Fatalf("Enqueue(commit failure) = (%+v, %t, %v)", job, created, err)
 	}
 
 	tx = &stubTx{rows: []pgx.Row{jobRow("fedcba9876543210fedcba9876543210", request, StatePending)}}

@@ -145,6 +145,52 @@ func TestWorkerHeartbeatCancellationCancelsCooperativeHandler(t *testing.T) {
 	}
 }
 
+func TestWorkerHandlerCompletionCancelsBlockedHeartbeat(t *testing.T) {
+	job := claimedJob(1)
+	heartbeatStarted := make(chan struct{})
+	completeCalls := 0
+	store := &stubStore{
+		heartbeat: func(ctx context.Context, _ Lease, _ time.Duration) (Job, error) {
+			close(heartbeatStarted)
+			<-ctx.Done()
+			return Job{}, ctx.Err()
+		},
+		complete: func(context.Context, Lease) (Job, error) {
+			completeCalls++
+			return Job{State: StateSucceeded}, nil
+		},
+		fail: func(context.Context, Lease, Failure) (Job, error) {
+			t.Fatal("unexpected fail")
+			return Job{}, nil
+		},
+	}
+	worker := validWorker(store, func(context.Context, Job) error {
+		<-heartbeatStarted
+		return nil
+	})
+	worker.HeartbeatInterval = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.runAttempt(ctx, job)
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("runAttempt() = %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		cancel()
+		err := <-done
+		t.Fatalf("runAttempt blocked joining heartbeat; cleanup returned %v", err)
+	}
+	if completeCalls != 1 {
+		t.Fatalf("Complete calls = %d, want 1", completeCalls)
+	}
+}
+
 func TestWorkerBoundsFailureText(t *testing.T) {
 	job := claimedJob(1)
 	var got Failure
@@ -237,6 +283,14 @@ func TestWorkerRunAndAttemptFailurePaths(t *testing.T) {
 			complete:  func(context.Context, Lease) (Job, error) { return Job{}, nil },
 			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, nil },
 			want:      ErrLeaseLost,
+		},
+		{
+			name:      "heartbeat context cancellation",
+			handler:   func(ctx context.Context, _ Job) error { <-ctx.Done(); return ctx.Err() },
+			heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return Job{}, context.Canceled },
+			complete:  func(context.Context, Lease) (Job, error) { return Job{}, nil },
+			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, nil },
+			want:      context.Canceled,
 		},
 		{
 			name: "complete canceled", handler: func(context.Context, Job) error { return nil },

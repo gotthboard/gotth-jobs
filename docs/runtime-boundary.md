@@ -53,5 +53,13 @@ attempt numbers provide completeness oracles.
 
 Warnings or partial results are failures. Explicit transactions use bounded
 rollback contexts detached from caller cancellation. Commit failures are
-reported as `ErrCommitOutcomeUnknown`; no implicit retry occurs. The library
-changes no session-scoped setting, so pooled-state restoration tests are N/A.
+reported as `ErrCommitOutcomeUnknown`; no implicit retry occurs. A nonzero Job
+returned by Claim under that error carries only the ID and lease token needed
+for reconciliation and must not be handled before durable confirmation.
+
+Handler return closes the heartbeat stop signal and cancels the per-attempt
+context before the worker joins the heartbeat goroutine. Context cancellation
+caused by that local teardown is ignored for heartbeat classification; parent
+cancellation and independently produced heartbeat failures remain errors. The
+library changes no session-scoped setting, so pooled-state restoration tests
+are N/A.

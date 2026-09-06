@@ -38,9 +38,10 @@ mechanism, not a general read contract.
 ## Fencing and outcomes
 
 Mutation methods use explicit transactions. Query-stage errors roll back.
-Commit errors wrap `ErrCommitOutcomeUnknown`; callers reconcile by reading the
-known job ID and token before retrying. No unknown outcome is retried by the
-library.
+Commit errors wrap `ErrCommitOutcomeUnknown`; Claim preserves a produced job's
+ID and lease token in its value return so callers can reconcile the durable
+row. That value is reconciliation-only while the error is non-nil and does not
+authorize handling. No unknown outcome is retried by the library.
 
 Complete, fail, and heartbeat use the exact `(job_id, lease_token)` pair and
 require a non-expired running lease. An old worker cannot mutate the record
@@ -51,10 +52,13 @@ fencing contract.
 ## Worker
 
 `Worker.Run` executes one job at a time. A heartbeat goroutine is bounded to
-the active handler. Losing or canceling the lease cancels the handler context.
-Handler panic becomes a bounded retryable failure instead of terminating the
-worker process. Shutdown stops heartbeats and leaves the lease to expire; it
-does not falsely record a handler failure.
+the active handler. After the handler returns, the worker signals heartbeat
+stop and cancels its attempt context before joining; context cancellation from
+that local teardown does not suppress acknowledgement. Parent cancellation and
+genuine heartbeat failures remain visible. Losing or canceling the lease
+cancels the handler context. Handler panic becomes a bounded retryable failure
+instead of terminating the worker process. Shutdown stops heartbeats and
+leaves the lease to expire; it does not falsely record a handler failure.
 
 ## Trust boundary
 

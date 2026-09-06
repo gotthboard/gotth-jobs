@@ -35,6 +35,10 @@ Consumers that need atomic domain mutation plus enqueue call `EnqueueTx` on
 their existing `pgx.Tx`. The library does not pretend that enqueueing after a
 separate domain commit is reliable.
 
+If `Claim` returns a nonzero job with `ErrCommitOutcomeUnknown`, only its ID
+and lease token may be used to reconcile the durable row. The job must not be
+handled until the committed state and exact token are confirmed.
+
 ## Limits
 
 - queue and kind: 128 bytes each;

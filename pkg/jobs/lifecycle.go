@@ -86,6 +86,9 @@ type claimResult struct {
 
 // Claim atomically returns one eligible attempt with a new random fencing
 // token. ErrNoJob means no row was eligible at this instant.
+// If the error matches ErrCommitOutcomeUnknown and the returned Job is
+// nonzero, its ID and lease token are for reconciliation only; the caller must
+// confirm the durable row and token before handling the job.
 //
 // Complexity: local time and space are tight Theta(1); database time is an
 // indexed exhausted-lease update plus one ordered lock/claim operation whose
@@ -133,7 +136,7 @@ func (repository *PostgreSQL) claimWithToken(ctx context.Context, request ClaimR
 		return claimResult{job: job, found: true}, nil
 	})
 	if err != nil {
-		return Job{}, err
+		return result.job, err
 	}
 	if !result.found {
 		return Job{}, ErrNoJob

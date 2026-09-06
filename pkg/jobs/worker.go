@@ -34,7 +34,10 @@ type Worker struct {
 	Handler           Handler
 }
 
-var errHandlerPanicked = errors.New("handler panicked")
+var (
+	errHandlerPanicked = errors.New("handler panicked")
+	errHandlerFinished = errors.New("handler finished")
+)
 
 // Run claims and handles one job at a time until ctx ends or a store/lease
 // failure makes continued operation dishonest.
@@ -124,29 +127,31 @@ func (worker Worker) validate() error {
 //
 // Complexity: local coordination time is O(h), Omega(1), where h is heartbeat
 // count; total time includes handler H plus h delegated heartbeat calls and one
-// completion/failure call; auxiliary space O(1), Omega(1), tight Theta(1)
-// beyond the handler's own space.
+// cancellation/join plus one completion/failure call; auxiliary space O(1),
+// Omega(1), tight Theta(1) beyond the handler's own space.
 func (worker Worker) runAttempt(ctx context.Context, job Job) error {
-	attemptContext, cancel := context.WithCancel(ctx)
+	attemptContext, cancel := context.WithCancelCause(ctx)
 	stopHeartbeat := make(chan struct{})
 	heartbeatResult := make(chan error, 1)
 	go func() {
 		err := worker.heartbeat(attemptContext, stopHeartbeat, job.Lease)
 		if err != nil {
-			cancel()
+			cancel(err)
 		}
 		heartbeatResult <- err
 	}()
 
 	handlerErr := callHandler(attemptContext, worker.Handler, job)
 	close(stopHeartbeat)
+	cancel(errHandlerFinished)
 	heartbeatErr := <-heartbeatResult
-	cancel()
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if heartbeatErr != nil {
+	stoppedAfterHandler := errors.Is(heartbeatErr, context.Canceled) &&
+		errors.Is(context.Cause(attemptContext), errHandlerFinished)
+	if heartbeatErr != nil && !stoppedAfterHandler {
 		if errors.Is(heartbeatErr, ErrCanceled) {
 			return nil
 		}

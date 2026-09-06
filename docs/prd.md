@@ -28,11 +28,12 @@ and truthful delivery guarantees.
   that cancellation is cooperative and cannot undo external effects.
 - `JOB-009`: Expose bounded dead-letter inspection, explicit redrive, exact
   job lookup, and per-queue state counts.
-- `JOB-010`: Provide a one-job-at-a-time worker loop with heartbeat,
-  cancellation propagation, panic containment, permanent-error
-  classification, and bounded polling.
+- `JOB-010`: Provide a one-job-at-a-time worker loop with heartbeat, bounded
+  heartbeat teardown, cancellation propagation, panic containment,
+  permanent-error classification, and bounded polling.
 - `JOB-011`: Classify transaction commit failures as an unknown outcome and
-  never retry them implicitly.
+  never retry them implicitly; preserve any generated identity and fencing
+  token needed for reconciliation without authorizing work under error.
 - `JOB-012`: Keep migration application, credentials, payload encryption,
   retention, authorization, and handler idempotency consumer-owned.
 - `JOB-013`: Publish under the MIT license selected by the maintainer.

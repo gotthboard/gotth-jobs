@@ -6,6 +6,54 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 05:22 CDT - Repair acknowledgement and PostgreSQL boundaries
+
+Implementation source: `1fc2a7b3db6edd354e7efa4154f87032866cb090`
+
+Affected files:
+
+- Worker acknowledgement reconciliation and renewal interval validation
+- EnqueueTx caller isolation inspection
+- pgx job query result-mode enforcement and stored-row validation
+- focused unit, PostgreSQL, public API, and external-consumer tests
+- architecture, runtime, performance, verification, and workflow records
+
+Explanation:
+
+Worker now returns secret-safe `LeaseReconciliationError` values for unknown
+Heartbeat, Complete, and Fail commit outcomes, retaining the exact affected
+job and lease without retrying. Heartbeat intervals may not exceed half the
+lease. EnqueueTx accepts only Read Committed and never retries a caller-owned
+transaction. Every job-returning query forces DescribeExec and binary formats
+for all job-column OIDs, so payload size checks run before ownership allocation
+under every pgx default mode and full-range timestamps stay on binary decoding.
+Stored SQL NULL payloads, missing mandatory timestamps, and invalid mandatory
+or optional timestamps are rejected.
+
+Verification:
+
+- expected-red unit and real-pgx query-mode/isolation evidence
+- constrained local focused repeats, package, vet, and integration compile
+- exact clean-source format, vet, unit, build, full race, 50 affected race
+  repeats, fuzz, and 97.3% statement coverage on `development`
+- PostgreSQL 17.10 race/coverage, three five-mode allocation runs, and ten
+  race-instrumented isolation/key-retention repeats
+- exact-source standalone external-consumer test/build and full performance
+  matrix
+- every defect-specific path is covered; exact unrelated/preexisting gaps are
+  recorded in verification evidence
+
+Risks / non-goals:
+
+- DescribeExec adds one round trip relative to cached extended execution; the
+  measured cost is disclosed and no speedup is claimed.
+- The half-lease budget is not a hard guarantee across arbitrary pauses.
+- Delivery remains at least once and handler idempotency remains
+  consumer-owned.
+- Two fresh independent reviews remain orchestrator-owned. This repair does
+  not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 04:08 CDT — Bound heartbeat and row payload costs
 
 Commit: `53cf140090cb7c1bc2076579437aab8edd3a0229`

@@ -14,5 +14,13 @@ performance evidence. The fifth independent review found heartbeat payload
 amplification, ineffective key-update retention under a partial unique index,
 and double/unbounded row payload copying; all three are repaired with
 exact-source race, PostgreSQL, allocation, external-consumer, fuzz, and
-performance evidence. Admission remains active until two fresh
+performance evidence. The sixth independent review found acknowledgement
+reconciliation loss, an unenforced pgx result-mode dependency, an unsafe
+Worker renewal interval,
+unsupported caller transaction isolation, and incomplete stored-row
+validation. All five are repaired at exact source `1fc2a7b` with unit/race,
+PostgreSQL 17 mode and interleaving, allocation, fuzz, external-consumer, and
+performance evidence. The first database run also caught an incomplete
+binary-result OID map; that attempt is recorded as failed and superseded by the
+final exact-source run. Admission remains active until two fresh
 orchestrator-owned reviews admit the final candidate.

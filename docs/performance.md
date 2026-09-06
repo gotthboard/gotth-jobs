@@ -113,3 +113,17 @@ a connection defaults to Exec or SimpleProtocol. This intentionally adds a
 describe round trip compared with cached extended modes. Exact-source
 cross-mode allocation and complete performance results are recorded in the
 verification evidence for that repair; no speedup is claimed.
+
+The exact-source matrix at `1fc2a7b` measured the disclosed round-trip cost:
+
+| Workload | Samples | p50 | p95 | p99 | Loop throughput |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| empty queue | 100 | 1.267654 ms | 1.335244 ms | 1.550079 ms | 769.75 ops/s |
+| 100-job small backlog, empty payload | 50 | 5.499281 ms | 7.755423 ms | 10.715397 ms | 90.74 ops/s |
+| 500-job typical backlog, 1 KiB payload | 200 | 6.090113 ms | 7.456307 ms | 7.545329 ms | 94.79 ops/s |
+| 20-job, 1 MiB payload boundary | 20 | 7.159882 ms | 10.696947 ms | 13.177113 ms | 64.03 ops/s |
+| 100-row locked prefix | 1 | 23.612485 ms | N/A | N/A | N/A |
+
+These results are slower than the prior cached-mode matrix, as expected from
+describing every job-returning statement. They remain provisional admission
+evidence, not a latency guarantee or optimization claim.

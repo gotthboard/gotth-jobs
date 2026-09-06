@@ -50,3 +50,8 @@ profiled because no optimization is proposed. The returned payload copy and
 database round trips are the expected visible costs. Re-profile when a real
 consumer supplies representative payloads, concurrency, retention, and
 service-level objectives.
+
+The later cursor-range repair at `9f6acc7` adds only validation before an
+invalid `ListDead` query and does not alter the successful query path. The
+performance matrix was therefore not rerun; these measurements remain ancestor
+evidence, not exact-source timing for that repair.

@@ -9,7 +9,8 @@ fingerprint covers queue, kind, payload, maximum attempts, and requested
 availability so key reuse with different semantics fails closed. Availability
 uses signed Unix seconds plus nanoseconds rather than the range-limited
 `time.Time.UnixNano` representation, but public enqueue validation admits only
-finite values the pinned PostgreSQL and pgx boundary can round-trip.
+finite values the pinned PostgreSQL and pgx boundary can round-trip. Dead-letter
+cursors use the same timestamp predicate before reaching pgx.
 
 ## Public operations
 
@@ -25,7 +26,8 @@ finite values the pinned PostgreSQL and pgx boundary can round-trip.
   bounded failure input and attempt count.
 - `Cancel`: idempotently cancel pending/running/canceled jobs and reject other
   terminal transitions.
-- `Get`, `Counts`, `ListDead`: bounded observation with copied payloads.
+- `Get`, `Counts`, `ListDead`: bounded observation with copied payloads and a
+  finite PostgreSQL timestamp cursor.
 - `Redrive`: move exactly one dead job back to pending and reset attempts.
 - `RetryPolicy.Delay`: saturating exponential delay without overflow.
 - `Worker.Run`: serial claim/handle/heartbeat/acknowledgement loop.

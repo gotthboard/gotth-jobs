@@ -2,27 +2,26 @@
 
 Current repair verification:
 
-- Repair source `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`
+- Repair source `9f6acc74f8901a58a3a9929d10ad7a3779241f4d`
   passed focused local package tests and vet under Go 1.26.6 with
   `GOMAXPROCS=2` and `-p=1`.
 - An exact clean clone on `development` passed format, vet, unit, build, race,
-  50 repeated race runs, coverage, and two five-second fuzz admissions.
-- Clean-clone statement coverage is 96.3%; PostgreSQL integration coverage is
-  96.5%. `validateEnqueue` is 100% covered. `validateStoredJob` is 95.5%
-  covered; its residual is the preexisting terminal-timestamp rejection, which
-  one older malformed fixture now reaches the new state/attempt rejection
-  before. Every legal and illegal state/attempt boundary has direct coverage.
-- PostgreSQL 17.10 integration passes against the pinned image, including exact
-  availability endpoint round trips and all 16 state/attempt boundary pairs,
-  in addition to the existing transaction, concurrency, fencing, lifecycle,
-  cancellation, dead-letter, and worker cases.
-- Fuzz admissions executed 66,722 envelope inputs and 342,657 diagnostic-text
-  inputs without a product failure.
-- Performance, separate external-consumer compilation, and Graphify integrity
-  gates pass. The measured matrix and limitations are in
-  `docs/performance.md`.
-- The prior clean review files are historical and do not admit this repair.
-  Two attributable fresh independent reviews of the final candidate remain
+  and coverage. Clean-source statement coverage is 96.3%; the shared
+  PostgreSQL timestamp predicate and `validateEnqueue` are 100% covered, and
+  `ListDead` is 90% covered. Every endpoint, adjacent out-of-range value, and
+  the exact wrap-to-Y2K fixture has direct coverage.
+- PostgreSQL 17.10 race and coverage integration passed against the pinned
+  image. Integration coverage is 96.5%. The new integration regression proves
+  the invalid cursor returns `ErrInvalid` instead of executing the wrapped
+  query and returning a modern dead row.
+- A standalone external consumer passed test and build against the exact clean
+  source. The source clone was clean before and after all gates.
+- The prior 50-repeat race, fuzz, performance, and Graphify results belong to
+  ancestor `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`; they were not rerun for
+  this bounded validation-only repair and are not current-source evidence.
+- The first independent review rejected candidate
+  `671a1eac9ddc6d273136d46de6d906730c7182e5`. Its cursor defect is repaired,
+  but two attributable fresh independent reviews of the final candidate remain
   required and are orchestrator-owned.
 
 Exact commands, artifact hashes, environment differences, and the remaining

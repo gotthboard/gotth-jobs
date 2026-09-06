@@ -9,7 +9,8 @@
 - Go 1.26.6 and `github.com/jackc/pgx/v5` 5.10.0.
 - Timestamps and database-bound durations use PostgreSQL's microsecond
   precision. Finer values are rejected instead of being silently truncated.
-- Explicit enqueue availability is finite and inclusive from Go's proleptic
+- Caller-supplied database timestamps, currently enqueue availability and
+  non-nil dead-letter cursors, are finite and inclusive from Go's proleptic
   Gregorian `-4713-11-24T00:00:00Z` through
   `294276-12-31T23:59:59.999999Z`, matching PostgreSQL 17's internal
   `MIN_TIMESTAMP` and exclusive `END_TIMESTAMP` bounds. Values outside that
@@ -38,10 +39,11 @@ uses no extension, dynamic identifier, server-side function, session setting,
 or global state.
 
 Boundary verification covers every library limit at limit-1, limit, limit+1,
-and materially beyond where representable. Integration proves two concurrent
-claimers cannot receive the same attempt, stale tokens cannot acknowledge,
-expired leases are reclaimed, exhausted leases become dead, and transactional
-enqueue rolls back with consumer state. Job IDs, row counts, states, and
+and materially beyond where representable. Timestamp coverage applies the same
+predicate to enqueue availability and dead-letter cursors. Integration proves
+two concurrent claimers cannot receive the same attempt, stale tokens cannot
+acknowledge, expired leases are reclaimed, exhausted leases become dead, and
+transactional enqueue rolls back with consumer state. Job IDs, row counts, states, and
 attempt numbers provide completeness oracles.
 
 ## Failure and cleanup

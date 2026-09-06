@@ -6,6 +6,46 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 01:28 CDT — Validate dead-letter cursor timestamps
+
+Commit: `9f6acc74f8901a58a3a9929d10ad7a3779241f4d`
+
+Affected files:
+
+- `pkg/jobs/values.go`
+- `pkg/jobs/operations.go`
+- focused unit and PostgreSQL integration tests
+- runtime, verification, and workflow records
+
+Explanation:
+
+Use one PostgreSQL timestamp predicate for explicit enqueue availability and
+non-nil dead-letter cursors. `ListDead` now rejects finite UTC microsecond
+timestamps outside PostgreSQL 17's range before pgx can wrap their binary
+encoding, including the independently reported far-future value that encoded
+as Y2K.
+
+Verification:
+
+- expected-red cursor regressions for both endpoints, adjacent out-of-range
+  values, and the exact wrap-to-Y2K fixture
+- focused local tests and vet with `GOMAXPROCS=2` and `-p=1`
+- exact clean-source format, vet, unit, build, race, and coverage gates on
+  `development`
+- PostgreSQL 17.10 race and coverage integration proving an invalid cursor
+  returns `ErrInvalid` before wrapped query behavior
+- standalone external-consumer test and build against the exact clean source
+
+Risks / non-goals:
+
+- Successful cursor query behavior and at-least-once delivery are unchanged.
+- Repeat, fuzz, performance, and graph gates were not rerun for this bounded
+  validation repair; prior results remain ancestor evidence only.
+- Two fresh independent reviews remain pending and orchestrator-owned. This
+  repair does not claim final admission.
+- No tag, consumer pin, remote push, merge, release, pull request, live
+  database, or deployment changes.
+
 ### 2026-09-06 00:51 CDT — Enforce PostgreSQL time and attempt boundaries
 
 Commit: `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`

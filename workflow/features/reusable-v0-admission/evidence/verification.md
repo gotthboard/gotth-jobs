@@ -3,89 +3,94 @@
 ## Identity and disposition
 
 - Baseline: `874212b762571cd88322867872e458af0d9e0435`.
-- Rejected candidate: `c64368a202f4af62c33a8640ac0d0923df2e333e`.
+- Audit-rejected candidate: `c64368a202f4af62c33a8640ac0d0923df2e333e`.
 - Admission audit: `/tmp/gotth-jobs-admission-audit.md`.
-- Repair source: `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`.
+- First repair source: `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`.
+- First-review-rejected candidate:
+  `671a1eac9ddc6d273136d46de6d906730c7182e5`.
+- First independent review: `/tmp/gotth-jobs-independent-judge-1.md`.
+- Current cursor repair source:
+  `9f6acc74f8901a58a3a9929d10ad7a3779241f4d`.
 - Branch: `feature/reusable-v0-admission` in the assigned isolated worktree.
-- State: active. The repair worker does not claim independent final admission.
-- No tag, Git remote configuration, push, merge, release, deployment, live
-  database, secret, or consumer was changed.
+- State: active. This repair worker does not claim independent final admission.
+- No tag, Git remote configuration, push, merge, release, pull request,
+  deployment, live database, secret, or consumer was changed.
 
-The audit rejected unbounded pgx timestamp encoding, incomplete state/attempt
-validation, and stale unattributed reviews. The first two defects are repaired
-and verified below. The prior review files remain historical; two fresh,
-attributable, orchestrator-owned reviews of the final candidate remain required.
+The admission audit found unbounded enqueue timestamp encoding and impossible
+state/attempt combinations. The first independent review then found the same
+PostgreSQL encoding boundary missing from non-nil `DeadCursor.FinishedAt`.
+Those implementation defects are repaired. The historical reviews do not
+admit the current tree; two fresh attributable orchestrator-owned reviews of
+the final candidate remain required.
 
 ## Contracts checked
 
-Before repair, the worker read the full audit, PRD, architecture,
-implementation specification, runtime boundary, feature plan, workflow
-manifest, workflow records, prior evidence, and prior reviews.
+The worker read the full admission audit, first independent review, PRD,
+architecture, implementation specification, runtime boundary, workflow plan,
+manifest, records, and prior evidence before changing production code.
 
-PostgreSQL 17 documents finite `timestamptz` support from 4713 BC through
-294276 AD at one-microsecond resolution. PostgreSQL 17 source defines
-`MIN_TIMESTAMP` as `-211813488000000000` microseconds from Y2K and
-`END_TIMESTAMP` as the exclusive `9223371331200000000`; in Go's proleptic
-Gregorian calendar these are `-4713-11-24T00:00:00Z` inclusive and
-`294277-01-01T00:00:00Z` exclusive. pgx 5.10.0's binary codec performs its
-microsecond arithmetic in `int64` without rejecting out-of-range finite
-values, so public validation must enforce this range before encoding.
+PostgreSQL 17 accepts finite `timestamptz` values from
+`-4713-11-24T00:00:00Z` through `294276-12-31T23:59:59.999999Z` in Go's
+proleptic Gregorian calendar. pgx 5.10.0 performs binary timestamp arithmetic
+in `int64` and does not reject every out-of-range finite `time.Time`; the exact
+reported fixture can wrap to Y2K. One internal predicate now enforces nonzero
+UTC, microsecond precision, and the inclusive PostgreSQL endpoints for both
+explicit enqueue availability and non-nil dead-letter cursors. The public API
+and successful-query semantics are unchanged.
 
-## Expected-red regressions
+## Expected-red cursor regressions
 
-Each production unit was changed only after its focused regression failed:
+Before the production repair,
+`TestListDeadCursorPostgreSQLRange` accepted the exact minimum minus one
+microsecond, maximum plus one microsecond, and
+`time.Unix(18_447_690_758_509, 551_616_000).UTC()`. The expected-red log is:
 
-1. `TestEnqueueAvailabilityPostgreSQLRange` first failed with the manual's
-   year-level lower fixture, one microsecond above the maximum, and the audit's
-   exact pgx fixture that wrapped to Y2K. After PostgreSQL source refined the
-   lower endpoint, the fixture was corrected before production. A controlled
-   replay with only the pre-fix range condition restored proves the final test
-   fails at exact minimum minus one microsecond, maximum plus one microsecond,
-   and the wrap fixture. Logs: `/tmp/gotth-jobs-red-time.log` and
-   `/tmp/gotth-jobs-red-time-exact-replay.log`.
-2. `TestStoredJobValidationStateAttemptBoundaries` failed only for pending at
-   `max_attempts`, running at zero, succeeded at zero, and dead at zero; all
-   other state boundaries were accepted. Log:
-   `/tmp/gotth-jobs-red-row.log`.
-3. `TestMigrationConstrainsStateAttemptCombinations` failed for the absent
-   schema constraint and each required relation. Log:
-   `/tmp/gotth-jobs-red-migration.log`.
+```text
+/tmp/gotth-jobs-red-dead-cursor.log
+SHA-256 1c37f8a5d4de1510ad29b7966fdfc0c209f79cb86637c745fa50462d2c999397
+```
 
-The repair then made each focused test green before moving to the next
-production unit. Existing cost comments now state that timestamp comparisons
-and state/attempt relation checks are constant-time.
+The final unit table accepts both exact endpoints and rejects both adjacent
+out-of-range values plus the exact wrap-to-Y2K fixture. Its stub database
+proves rejected cursors issue zero queries. The existing enqueue range table
+exercises the same endpoint and wrap boundaries through the shared predicate.
+
+`TestPostgreSQLListDeadRejectsWrappedCursor` creates a current dead row, then
+passes the exact wrap fixture to `ListDead`. It requires a nil result and
+`ErrInvalid`; the old behavior encoded the cursor as Y2K, ran the query, and
+returned that modern row.
 
 ## Local focused checks
 
-The agent host used Go 1.26.6-X:nodwarf5, Linux amd64. Repair work was limited
-to lightweight checks with `GOMAXPROCS=2` and `-p=1`:
+The agent host used Go 1.26.6-X:nodwarf5 on Linux amd64. Only lightweight
+checks ran locally:
 
 ```text
-GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '^TestEnqueueAvailabilityPostgreSQLRange$' -count=1
-GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '^TestStoredJobValidation(RejectsEveryImpossibleShape|StateAttemptBoundaries)$' -count=1
-GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '^(TestMigrationConstrainsStateAttemptCombinations|TestEnqueueAvailabilityPostgreSQLRange|TestStoredJobValidationStateAttemptBoundaries|TestStoredJobValidationRejectsEveryImpossibleShape)$' -count=1
+GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '^TestListDeadCursorPostgreSQLRange$' -count=1
+GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -run '^(TestListDeadCursorPostgreSQLRange|TestEnqueueAvailabilityPostgreSQLRange)$' -count=1
 GOMAXPROCS=2 go test -mod=readonly -p=1 ./pkg/jobs -count=1
 GOMAXPROCS=2 go vet -mod=readonly ./pkg/jobs
 ```
 
-All post-repair local checks passed. `git diff --check` and the tracked Go
-format check passed before the repair commit.
+All post-repair checks passed. The focused coverage run reports
+`isPostgreSQLTimestamp` at 100%; the narrower selection leaves unrelated paths
+in `validateEnqueue` and `ListDead` uncovered, so exact-source suite coverage
+below is the relevant function-level result.
 
-## Exact clean-revision gates
+## Exact clean-source development gates
 
 The repair source was transferred without a push in a Git bundle and cloned
 detached on `development` at:
 
 ```text
-~/.cache/openclaw-code-index/gotth-jobs/72c62231fa4a0012ceef0a9c5ff61ff05feaf859/source
+/home/linus/.cache/openclaw-code-index/gotth-jobs/9f6acc74f8901a58a3a9929d10ad7a3779241f4d/source
 ```
 
 The bundle SHA-256 is
-`359f51284b4c989fab93c450d8f10016b129598c435379a66b5181cd07549931`.
-The clone was clean before and after every gate. The host launcher is Go
-1.26.5-X:nodwarf5; the module selected Go 1.26.6 for execution.
+`983bb32f4762e3a94458c9d6ad562488e0107734793e53ddf0fc71d5bb92abc7`.
+The clone was clean before and after every gate. The module selected Go 1.26.6.
 
-The exact clone passed:
+The exact source passed:
 
 ```text
 gofmt tracked-file check
@@ -93,24 +98,12 @@ go vet -mod=readonly ./...
 go test -mod=readonly -count=1 ./...
 go build -mod=readonly ./...
 go test -mod=readonly -race -count=1 ./...
-go test -mod=readonly -race -count=50 ./...
 go test -mod=readonly -count=1 -coverprofile=<artifact>/coverage.out ./...
-go test -mod=readonly -run='^$' -fuzz='^FuzzEnvelopeValidationNeverPanics$' -fuzztime=5s -v ./pkg/jobs
-go test -mod=readonly -run='^$' -fuzz='^FuzzBoundedFailureIsValid$' -fuzztime=5s -v ./pkg/jobs
 ```
 
-Clean-clone statement coverage is 96.3%. `validateEnqueue` is 100% covered.
-`validateStoredJob` is 95.5% covered; its uncovered statement is the preexisting
-terminal-timestamp rejection, which one older malformed fixture now reaches the
-new state/attempt rejection before. Every newly added timestamp and
-state/attempt branch is covered, so the confirmed defects have no known
-coverage gap.
-
-Fuzz results:
-
-- envelope validation: 66,722 executions;
-- bounded failure text: 342,657 executions;
-- total: 409,379 executions without a product failure.
+Statement coverage is 96.3%. `isPostgreSQLTimestamp` and `validateEnqueue` are
+100% covered; `ListDead` is 90% covered. All branches introduced or shared by
+this cursor repair have direct tests, with no known relevant coverage gap.
 
 ## PostgreSQL 17 integration
 
@@ -120,70 +113,58 @@ Integration ran against disposable PostgreSQL 17.10 using exactly:
 postgres:17@sha256:a426e44bac0b759c95894d68e1a0ac03ecc20b619f498a91aae373bf06d8508d
 ```
 
-The race integration suite and non-race integration coverage suite passed.
-Coverage with integration is 96.5%. New integration cases round-trip the exact
-minimum, minimum plus one microsecond, maximum minus one microsecond, and exact
-maximum availability. They reject the adjacent out-of-range values and the pgx
-wrap fixture. The schema test inserts all 16 relevant state/attempt boundary
-combinations: pending `0,1,max-1,max`; running, succeeded, and dead
-`0,1,max`; canceled `0,1,max`. Only the four impossible pairs fail.
-
 Exact commands:
 
 ```text
 go test -mod=readonly -race -tags=integration -count=1 ./...
 go test -mod=readonly -tags=integration -count=1 -coverprofile=<artifact>/integration-coverage.out ./...
-go test -mod=readonly -tags='integration performance' -run='^TestPostgreSQLPerformanceAdmission$' -count=1 -v ./pkg/jobs
 ```
 
-Existing PostgreSQL version/UTF8, transaction rollback, idempotency,
-concurrency, claim, fencing, lease expiry, heartbeat, retry, exhaustion,
-cancellation, dead listing, redrive, counts, future scheduling, and worker
-oracles also passed. The disposable container was removed, and the exact clone
-remained clean.
+Both suites passed; integration statement coverage is 96.5%. The new real-pgx
+regression proves the invalid cursor returns `ErrInvalid` without wrapped query
+behavior. Existing exact enqueue endpoint round trips, all 16 state/attempt
+boundary combinations, transaction, concurrency, fencing, lifecycle,
+cancellation, dead-letter, and worker oracles also passed. The container was
+removed and the exact source remained clean.
 
-## Performance and consumer gates
+## External consumer and proportional scope
 
-The uninstrumented performance admission passed at the repair source. Exact
-percentiles and limitations are in `docs/performance.md`; no speedup is
-claimed. The race-instrumented integration run is not used as a timing source.
+A standalone module outside the repository used a local `replace` to the exact
+clean source. It passed:
 
-A standalone module outside the repository used a local `replace` only to the
-clean clone. It compiled every public operation and value family, traversed all
-public sentinels, read `Migrations`, asserted the `Store` implementation,
-and passed `go test -mod=readonly -count=1 ./...` and
-`go build -mod=readonly ./...`.
+```text
+go test -mod=readonly -count=1 ./...
+go build -mod=readonly ./...
+```
 
-Graphify 0.9.32 code-only extraction reported 219 nodes, 506 valid edges, and
-15 communities. Diagnostics found zero missing or dangling endpoints,
-self-loops, exact duplicate edges, or directed/undirected same-endpoint
-collision groups. The optional SQL parser remains unavailable; PostgreSQL
-executed the migration and all material SQL paths directly.
+The earlier 50-repeat race, two fuzz targets, performance matrix, and Graphify
+integrity gates were not rerun because this repair adds only synchronous input
+validation before the existing query and does not alter successful SQL,
+concurrency, retry, allocation, or package dependency behavior. Their results
+at ancestor `72c62231fa4a0012ceef0a9c5ff61ff05feaf859` remain historical
+evidence only and are not represented as exact current-source gates.
 
-## Artifact inventory
+## Current artifact inventory
 
 Artifact root:
 
 ```text
-~/.cache/openclaw-code-index/gotth-jobs/72c62231fa4a0012ceef0a9c5ff61ff05feaf859/artifacts/
+/home/linus/.cache/openclaw-code-index/gotth-jobs/9f6acc74f8901a58a3a9929d10ad7a3779241f4d/artifacts
 ```
 
 | Artifact | SHA-256 |
 | --- | --- |
-| `full-gates.log` | `23af52945d2d8a9a2e4ce5573e1b27b4d8823430c267ccacd330cfa7550436b2` |
-| `coverage.out` | `9b77d4f6cf9f85dd0a53d36a53770fd1e2ffdf0c678a1da7aefe1f30bbc8b552` |
-| `integration.log` | `03de2bd147008eddc3e64f7b9ee2a1a936768949e66cb47ae619a67911c7dd49` |
-| `integration-coverage.out` | `6c12a64c4bf137d5e97f0f723e7a13d3e7e617973b519a73b6cd822adf0a3d7e` |
-| `performance.log` | `32a96cbbf3c4402e89e38d39ead9e286238f275c5afc83168bdf45f29e13c19f` |
-| `external-consumer.log` | `412f76a48d9b0f050424bfdfd1c590d908f420d7f4caaab888f254cad7246a7c` |
-| `graph.json` | `cdc39341c68f477cce0b18fc5e18fd6fc450b1bde416304dddac2e5f54b3aab0` |
-| `graph-diagnose.json` | `a0663bb195a2d123094df6d571ea869281133e8d41e0d7406c65d4a41c7a5d82` |
-| `graphify.log` | `0a23b47f991c93da3eafd006ad0f6ede250f519f681e1a93d52df9c648efe5fa` |
+| `bundle-verify.log` | `d44b66d946ddeb6f2577b2a957fcea8fda4928112293f9dacb1a2d9da5b82d1b` |
+| `clean-gates.log` | `6dd42e1c47071baefa6c40f6a0b1c33aab5289895b966254b6fb404bb63117ba` |
+| `coverage.out` | `be816d10c02d2b2f9993ed254fb06a5bf8797af319f89370bc6f72683afd201a` |
+| `integration.log` | `4957dad650b8ca4f88f216ca621619e7186ae291d2c06bc6cba2235c1626b59a` |
+| `integration-coverage.out` | `f486feda0c27b4093fbb8b24e2ddf8f9cb703eb787cd65cf2f7a419cc138a4ab` |
 | `postgresql-image.json` | `ea1f9a4b971fc46a7ddf85058899556ac0d523ed0bd9bf962bde7d0b12c5fa8b` |
+| `external-consumer.log` | `ad897c89e3fb796acd06ce727b090988870e19949c2360672314a0b85a2936c9` |
 
 ## Remaining gate
 
-Implementation and evidence gates are complete for the repair source. Final
-admission is still blocked on two attributable, fresh independent clean
-reviews pinned to the final candidate tree. Those reviews are explicitly
-orchestrator-owned; this worker neither creates them nor claims their result.
+Implementation and proportional exact-source evidence gates are complete for
+the cursor repair. Final admission remains blocked on two attributable, fresh
+independent clean reviews pinned to the final candidate tree. Those reviews
+are orchestrator-owned; this worker neither creates them nor claims a result.

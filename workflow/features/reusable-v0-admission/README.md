@@ -22,5 +22,14 @@ validation. All five are repaired at exact source `1fc2a7b` with unit/race,
 PostgreSQL 17 mode and interleaving, allocation, fuzz, external-consumer, and
 performance evidence. The first database run also caught an incomplete
 binary-result OID map; that attempt is recorded as failed and superseded by the
-final exact-source run. Admission remains active until two fresh
+Judge 6 repair's exact-source run. Admission remains active until two fresh
 orchestrator-owned reviews admit the final candidate.
+
+The seventh independent review found that cancellation could still erase an
+unknown Heartbeat outcome, non-payload row fields allocated before validation,
+the integration reset trusted any PostgreSQL 17 URL, nullable text presence
+was collapsed, and the Judge 6 workflow event was absent. All five are
+repaired at exact source `9711e2b` with deterministic heartbeat races, exact
+borrowed-source bounds, fail-closed server-verified reset identity, complete
+lease/nullability shape checks, and corrected append-only workflow history.
+Fresh final reviews remain orchestrator-owned.

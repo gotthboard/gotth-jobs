@@ -67,11 +67,15 @@ default, ensures pgx knows result OIDs, prevents bytea's text decoder from
 allocating a decoded payload before the bounded scanner runs, and preserves
 binary decoding across PostgreSQL's full finite timestamp range. The tradeoff is two protocol round
 trips per job-returning statement. The scanner rejects SQL NULL and oversized
-payloads before payload allocation and makes one ownership copy of accepted
-borrowed binary bytes. Row validation requires non-NULL mandatory timestamps
-and checks every mandatory or present optional timestamp for UTC, finite
-PostgreSQL range, and microsecond precision after pgx timestamps are normalized
-to UTC.
+payloads before payload allocation. The same borrowed-byte hook enforces exact
+schema minima/maxima for ID, queue, kind, state, idempotency key, lease token,
+lease owner, and failure text before one string ownership conversion, and
+requires the request fingerprint to be exactly 32 bytes before one byte-slice
+copy. Nullable text validity is retained; present-empty key/token/owner values
+are invalid, and non-running rows require the complete Lease value to be zero.
+Row validation requires non-NULL mandatory timestamps and checks every
+mandatory or present optional timestamp for UTC, finite PostgreSQL range, and
+microsecond precision after pgx timestamps are normalized to UTC.
 
 ## Worker renewal budget
 

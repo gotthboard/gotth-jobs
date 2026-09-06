@@ -127,3 +127,24 @@ The exact-source matrix at `1fc2a7b` measured the disclosed round-trip cost:
 These results are slower than the prior cached-mode matrix, as expected from
 describing every job-returning statement. They remain provisional admission
 evidence, not a latency guarantee or optimization claim.
+
+The Judge 7 repair extends the borrowed-source length check from payload to
+every stored text field and the request fingerprint. Under all five supported
+connection defaults, three exact-source runs rejected a 1 MiB text source with
+about 4-19 KiB/op and a 1 MiB fingerprint source with about 9-46 KiB/op. These
+figures include pgx/network and transaction storage but remain far below one
+source-sized destination ownership copy. Accepted values still make one
+bounded library ownership conversion.
+
+Because the shared row scan changed, the complete exact-source matrix at
+`9711e2b` was rerun:
+
+| Workload | Samples | p50 | p95 | p99 | Loop throughput |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| empty queue | 100 | 1.111502 ms | 1.330294 ms | 1.412434 ms | 858.65 ops/s |
+| 100-job small backlog, empty payload | 50 | 5.309285 ms | 5.782740 ms | 12.895895 ms | 104.59 ops/s |
+| 500-job typical backlog, 1 KiB payload | 200 | 6.119254 ms | 7.812782 ms | 10.988735 ms | 89.74 ops/s |
+| 20-job, 1 MiB payload boundary | 20 | 6.933212 ms | 8.361697 ms | 9.502809 ms | 76.12 ops/s |
+| 100-row locked prefix | 1 | 16.594103 ms | N/A | N/A | N/A |
+
+This is confirmation evidence, not an optimization or latency guarantee.

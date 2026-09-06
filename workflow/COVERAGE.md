@@ -2,7 +2,7 @@
 
 | Requirement | Design/spec | Implementation | Tests | Status |
 | --- | --- | --- | --- | --- |
-| JOB-001 | architecture/data model | `migrations`, values, bounded bytea scanner and row validation | values, NULL/timestamp boundaries, one-copy allocation, PostgreSQL modes | covered |
+| JOB-001 | architecture/data model | `migrations`, values, bounded borrowed-byte scanners and row validation | exact field edges, NULL/presence/state shapes, ownership/allocation, PostgreSQL modes | covered |
 | JOB-002 | architecture/enqueue | Read Committed-only `EnqueueTx` | isolation unit/PostgreSQL and rollback integration | covered |
 | JOB-003 | spec/enqueue | one-snapshot fingerprint and non-partial unique key | delete/update replacement interleavings, NULL keys, sequential/concurrent PostgreSQL | covered |
 | JOB-004 | architecture/claim | `Claim` | claim unit and concurrent PostgreSQL | covered |
@@ -16,11 +16,11 @@
 | JOB-012 | trust boundary | API shape and docs | external-package compile and rollback | covered |
 | JOB-013 | distribution | `LICENSE` and policy docs | license inventory | covered |
 
-Statement coverage is 97.3% for both the clean-clone unit suite and PostgreSQL
-integration at repair source `1fc2a7b`. EnqueueTx isolation, query-option
-forcing, the bounded payload scanner, every shared job scan/validation entry
-point, and all typed reconciliation methods are 100% covered. Every new Worker
-acknowledgement branch is covered; `runAttempt` remains 97.8% because its
+Statement coverage is 97.4% for both the clean-clone unit suite and PostgreSQL
+integration at repair source `9711e2b`. EnqueueTx isolation, query-option
+forcing, both bounded borrowed-byte scanners, every shared job scan/validation
+entry point, and all typed reconciliation methods are 100% covered. Both new
+Worker precedence races are covered; `runAttempt` remains 97.8% because its
 preexisting invalid retry-policy branch is unreachable through validated
 `Worker.Run`. Exact residual blocks are recorded in verification evidence;
 coverage is iteration evidence, not the admission oracle.

@@ -63,14 +63,20 @@ Unknown Heartbeat, Complete, or Fail commit outcomes are exposed through
 `LeaseReconciliationError`. `ReconciliationJob` and `ReconciliationLease`
 identify the affected acknowledgement for durable inspection only. The type
 unwraps the original error, omits the job ID and lease token from `Error()`,
-and does not authorize an implicit acknowledgement retry.
+and does not authorize an implicit acknowledgement retry. After joining the
+heartbeat, Worker gives an unknown commit outcome precedence over parent
+cancellation and handler-teardown cancellation so reconciliation is never
+silently replaced by a less specific cancellation result.
 
 Every query that returns a job overrides the connection default with pgx
 `DescribeExec` and requests binary results for every job-column OID. This
 preserves the bounded scanner and full timestamp-range contracts even when a
 pool defaults to Exec or SimpleProtocol, at the disclosed cost of two protocol
 round trips for each such statement. Stored rows with SQL NULL payloads or
-missing/invalid timestamps are rejected.
+missing/invalid timestamps are rejected. Every stored text field and request
+fingerprint is length-checked through pgx's borrowed-byte scanner hook before
+one bounded ownership conversion; nullable key and lease fields preserve SQL
+NULL presence, and present-empty values are rejected.
 
 ## Limits
 
@@ -99,3 +105,10 @@ pins its first compatibility contract. No tag currently exists.
 Forgejo remains authoritative and mirrors one way to GitHub. See
 [`docs/distribution.md`](docs/distribution.md),
 [`docs/RELEASING.md`](docs/RELEASING.md), and [`LICENSE`](LICENSE).
+
+PostgreSQL integration tests are destructive and fail closed. `make
+verify-integration` requires
+`GOTTH_JOBS_ALLOW_DESTRUCTIVE_TEST_DATABASE_RESET=true`; PostgreSQL itself
+must report the exact database name `gotth_jobs_test` and that database must
+carry the comment `gotth-jobs:dedicated-destructive-integration-test-v1`.
+The URL variable name alone is never treated as authorization.

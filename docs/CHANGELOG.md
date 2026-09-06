@@ -6,6 +6,51 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 06:27 CDT - Bound stored rows and harden integration reset
+
+Implementation source: `9711e2b00dc95ae3070090745d611b65eca686f3`
+
+Affected files:
+
+- Worker heartbeat reconciliation ordering and deterministic race tests
+- bounded pgx row scanners and malformed-row tests
+- destructive PostgreSQL integration target guard and runner contract
+- PostgreSQL mode/allocation tests, documentation, and workflow evidence
+
+Explanation:
+
+Worker now gives an unknown Heartbeat commit outcome immediate precedence
+after heartbeat join over both parent and local teardown cancellation, always
+returning the secret-safe `LeaseReconciliationError`. Every untrusted stored
+text, nullable-text, payload, and fingerprint field is bounded through pgx's
+borrowed-byte scanner hook before one ownership conversion. Nullable presence
+is retained, present-empty key/token/owner fields are rejected, fingerprints
+must be exactly 32 bytes, and non-running jobs require a wholly zero Lease.
+Destructive integration reset now requires an explicit opt-in plus the exact
+database name and an exact PostgreSQL database-comment marker before DDL.
+
+Verification:
+
+- expected-red heartbeat, scanner, nullable-presence, fingerprint, and reset
+  authorization regressions
+- constrained local package, focused repeat, vet, and integration compile
+- exact clean-source format, vet, unit, build, full race, 50 affected race
+  repeats, fuzz, and 97.4% statement coverage on `development`
+- PostgreSQL 17.10 race/coverage, three five-mode payload/text/fingerprint
+  allocation runs, ten safety/isolation/key-lock repeats, and performance
+- standalone external-consumer test/build; every changed production path is
+  100% covered
+
+Risks / non-goals:
+
+- pgx/network buffers remain runtime storage; the one-conversion claim is the
+  library's ownership conversion after source-length validation.
+- Integration authorization is intentionally exact and requires disposable
+  database setup before `make verify-integration`.
+- Two fresh independent reviews remain orchestrator-owned. This repair does
+  not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 05:22 CDT - Repair acknowledgement and PostgreSQL boundaries
 
 Implementation source: `1fc2a7b3db6edd354e7efa4154f87032866cb090`

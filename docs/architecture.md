@@ -77,7 +77,10 @@ If Worker receives `ErrCommitOutcomeUnknown` from Heartbeat, Complete, or
 Fail, it returns `LeaseReconciliationError`. The typed error unwraps the
 original failure and exposes the exact affected lease plus the known or
 returned job only for reconciliation. Its text omits job identity and the
-secret token, and Worker never retries the acknowledgement implicitly.
+secret token, and Worker never retries the acknowledgement implicitly. An
+unknown Heartbeat commit result takes precedence immediately after the
+heartbeat join, including when the same error also matches parent or local
+teardown cancellation.
 
 ## Worker
 
@@ -108,11 +111,15 @@ consumer authenticates callers and decides who may enqueue, inspect, cancel,
 or redrive. The library validates every public input and copies payload bytes
 at the API boundary. Every job-returning query forces pgx `DescribeExec` and
 binary formats for every job-column OID, overriding connection defaults
-including Exec and SimpleProtocol. `DescribeExec` obtains result OIDs and costs two
-protocol round trips per statement. The binary `BytesScanner` checks pgx's
-borrowed source length before payload allocation and makes exactly one copy
-into library-owned memory; pgx's network/read buffers remain separate runtime
-storage. SQL NULL payloads are distinct from empty bytea and are rejected.
+including Exec and SimpleProtocol. `DescribeExec` obtains result OIDs and
+costs two protocol round trips per statement. The binary `BytesScanner` checks
+pgx's
+borrowed source length for every text/nullable-text field, payload, and request
+fingerprint before one bounded ownership conversion; pgx's network/read
+buffers remain separate runtime storage. The fingerprint must be exactly 32
+bytes. SQL NULL payloads are distinct from empty bytea and are rejected;
+nullable key/token/owner presence is retained so present-empty values are
+rejected and a non-running job must have an entirely zero Lease.
 Mandatory stored timestamps must be present; every mandatory or present
 optional timestamp is normalized after pgx decoding and validated as finite,
 microsecond-precision UTC before exposure. Custom Store jobs must already use

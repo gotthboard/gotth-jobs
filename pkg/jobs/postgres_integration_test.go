@@ -76,6 +76,14 @@ func TestPostgreSQLEnqueueIdempotencyAndConsumerRollback(t *testing.T) {
 	if _, _, err := repository.Enqueue(ctx, changed); !errors.Is(err, jobs.ErrIdempotencyConflict) {
 		t.Fatalf("Enqueue(conflict) = %v", err)
 	}
+	withoutKeyA, createdA, err := repository.Enqueue(ctx, jobs.EnqueueRequest{Queue: "default", Kind: "without-key", MaxAttempts: 1})
+	if err != nil || !createdA {
+		t.Fatalf("Enqueue(first NULL key) = (%+v, %t, %v)", withoutKeyA, createdA, err)
+	}
+	withoutKeyB, createdB, err := repository.Enqueue(ctx, jobs.EnqueueRequest{Queue: "default", Kind: "without-key", MaxAttempts: 1})
+	if err != nil || !createdB || withoutKeyB.ID == withoutKeyA.ID {
+		t.Fatalf("Enqueue(second NULL key) = (%+v, %t, %v)", withoutKeyB, createdB, err)
+	}
 
 	if _, err := pool.Exec(ctx, "CREATE TABLE public.gotth_job_consumer (id integer PRIMARY KEY)"); err != nil {
 		t.Fatal(err)
@@ -104,6 +112,122 @@ func TestPostgreSQLEnqueueIdempotencyAndConsumerRollback(t *testing.T) {
 	}
 	if markerCount != 0 || jobCount != 0 {
 		t.Fatalf("rollback left marker=%d job=%d", markerCount, jobCount)
+	}
+}
+
+func TestPostgreSQLEnqueueIdempotentFallbackRetainsKeyUpdate(t *testing.T) {
+	pool, repository := integrationRepository(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	requestA := jobs.EnqueueRequest{
+		Queue: "key-retention", Kind: "send-a", Payload: []byte("payload-a"),
+		IdempotencyKey: "original-key", MaxAttempts: 3,
+	}
+	created, wasCreated, err := repository.Enqueue(ctx, requestA)
+	if err != nil || !wasCreated {
+		t.Fatalf("Enqueue(create A) = (%+v, %t, %v)", created, wasCreated, err)
+	}
+
+	transaction, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback(context.Background())
+	duplicate, wasCreated, err := repository.EnqueueTx(ctx, transaction, requestA)
+	if err != nil || wasCreated || duplicate.ID != created.ID {
+		t.Fatalf("EnqueueTx(duplicate A) = (%+v, %t, %v)", duplicate, wasCreated, err)
+	}
+
+	updater, err := pool.Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer updater.Release()
+	const applicationName = "gotth-jobs-idempotency-key-update"
+	if _, err := updater.Exec(ctx, "SELECT set_config('application_name', $1, false)", applicationName); err != nil {
+		t.Fatal(err)
+	}
+	type updateResult struct {
+		rows int64
+		err  error
+	}
+	updateDone := make(chan updateResult, 1)
+	go func() {
+		result, updateErr := updater.Exec(ctx, "UPDATE public.gotth_jobs SET idempotency_key = 'moved-key' WHERE id = $1", created.ID)
+		updateDone <- updateResult{rows: result.RowsAffected(), err: updateErr}
+	}()
+
+	waiting := false
+	for !waiting {
+		select {
+		case result := <-updateDone:
+			t.Fatalf("key-changing UPDATE was not retained: rows=%d err=%v", result.rows, result.err)
+		default:
+		}
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (
+            SELECT 1 FROM pg_stat_activity
+            WHERE application_name = $1 AND state = 'active'
+              AND wait_event_type = 'Lock'
+        )`, applicationName).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if !waiting {
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	if err := transaction.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	updated := <-updateDone
+	if updated.err != nil || updated.rows != 1 {
+		t.Fatalf("key-changing UPDATE after transaction end = rows=%d err=%v", updated.rows, updated.err)
+	}
+
+	requestB := requestA
+	requestB.Kind = "send-b"
+	requestB.Payload = []byte("payload-b")
+	replacement, replacementCreated, err := repository.Enqueue(ctx, requestB)
+	if err != nil || !replacementCreated || replacement.ID == created.ID {
+		t.Fatalf("Enqueue(replacement B) = (%+v, %t, %v)", replacement, replacementCreated, err)
+	}
+	if _, _, err := repository.Enqueue(ctx, requestA); !errors.Is(err, jobs.ErrIdempotencyConflict) {
+		t.Fatalf("Enqueue(A after key replacement) = %v, want ErrIdempotencyConflict", err)
+	}
+}
+
+func TestPostgreSQLHeartbeatAllocationIndependentOfPayload(t *testing.T) {
+	_, repository := integrationRepository(t)
+	ctx := context.Background()
+	measure := func(queue string, payload []byte) int64 {
+		t.Helper()
+		if _, _, err := repository.Enqueue(ctx, jobs.EnqueueRequest{Queue: queue, Kind: "heartbeat", Payload: payload, MaxAttempts: 1}); err != nil {
+			t.Fatal(err)
+		}
+		job, err := repository.Claim(ctx, jobs.ClaimRequest{Queue: queue, Worker: "worker", LeaseDuration: jobs.MaxLeaseDuration})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var heartbeatErr error
+		result := testing.Benchmark(func(b *testing.B) {
+			b.ReportAllocs()
+			for range b.N {
+				if err := repository.Heartbeat(ctx, job.Lease, jobs.MaxLeaseDuration); err != nil {
+					heartbeatErr = err
+					b.StopTimer()
+					return
+				}
+			}
+		})
+		if heartbeatErr != nil {
+			t.Fatalf("Heartbeat(%s) = %v", queue, heartbeatErr)
+		}
+		return result.AllocedBytesPerOp()
+	}
+
+	emptyBytes := measure("heartbeat-empty", nil)
+	maximumBytes := measure("heartbeat-maximum", make([]byte, jobs.MaxPayloadBytes))
+	if maximumBytes > emptyBytes+64*1024 {
+		t.Fatalf("Heartbeat allocations depend on payload: empty=%d maximum=%d bytes/op", emptyBytes, maximumBytes)
 	}
 }
 
@@ -390,7 +514,7 @@ func TestPostgreSQLConcurrentClaimLeaseFencingRetryAndExhaustion(t *testing.T) {
 	if _, err := repository.Complete(ctx, first.Lease); !errors.Is(err, jobs.ErrLeaseLost) {
 		t.Fatalf("stale complete = %v", err)
 	}
-	if _, err := repository.Heartbeat(ctx, second.Lease, time.Second); err != nil {
+	if err := repository.Heartbeat(ctx, second.Lease, time.Second); err != nil {
 		t.Fatalf("heartbeat = %v", err)
 	}
 	if retried, err := repository.Fail(ctx, second.Lease, jobs.Failure{Message: "temporary"}); err != nil || retried.State != jobs.StatePending {

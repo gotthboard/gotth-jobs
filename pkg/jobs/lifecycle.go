@@ -55,7 +55,7 @@ SET lease_until = clock_timestamp() + ($3 * interval '1 microsecond'),
     updated_at = clock_timestamp()
 WHERE id = $1 AND lease_token = $2 AND state = 'running'
   AND lease_until > clock_timestamp()
-RETURNING ` + jobColumns
+RETURNING true`
 
 const completeSQL = `UPDATE public.gotth_jobs
 SET state = 'succeeded', lease_token = NULL, lease_owner = NULL,
@@ -148,25 +148,37 @@ func (repository *PostgreSQL) claimWithToken(ctx context.Context, request ClaimR
 // clock. It never extends from the prior expiry.
 //
 // Complexity: local validation time O(i+t), Omega(i+t), tight Theta(i+t) for
-// ID and token bytes; auxiliary space O(1), Omega(1), tight Theta(1);
-// database cost is one indexed update and one indexed state read on rejection.
-func (repository *PostgreSQL) Heartbeat(ctx context.Context, lease Lease, duration time.Duration) (Job, error) {
+// ID and token bytes; auxiliary space and successful response size are tight
+// Theta(1); database cost is one indexed update and one indexed state read on
+// rejection.
+func (repository *PostgreSQL) Heartbeat(ctx context.Context, lease Lease, duration time.Duration) error {
 	if err := validateLeaseOperation(repository, ctx, lease); err != nil {
-		return Job{}, err
+		return err
 	}
 	if duration < MinLeaseDuration || duration > MaxLeaseDuration {
-		return Job{}, fmt.Errorf("%w: lease must be between %s and %s", ErrInvalid, MinLeaseDuration, MaxLeaseDuration)
+		return fmt.Errorf("%w: lease must be between %s and %s", ErrInvalid, MinLeaseDuration, MaxLeaseDuration)
 	}
 	if duration%time.Microsecond != 0 {
-		return Job{}, fmt.Errorf("%w: lease must use PostgreSQL microsecond precision", ErrInvalid)
+		return fmt.Errorf("%w: lease must use PostgreSQL microsecond precision", ErrInvalid)
 	}
-	return repository.leaseMutation(ctx, lease, heartbeatSQL, duration.Microseconds())
+	_, err := transact(ctx, repository.database, func(transaction pgx.Tx) (struct{}, error) {
+		var updated bool
+		err := transaction.QueryRow(ctx, heartbeatSQL, lease.JobID, lease.Token, duration.Microseconds()).Scan(&updated)
+		if err == nil {
+			return struct{}{}, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return struct{}{}, fmt.Errorf("update job lease: %w", err)
+		}
+		return struct{}{}, classifyLease(ctx, transaction, lease.JobID)
+	})
+	return err
 }
 
 // Complete acknowledges successful handling only for the exact active lease.
 //
-// Complexity: local validation time O(i+t), Omega(i+t), tight Theta(i+t);
-// auxiliary space O(1), Omega(1), tight Theta(1); database cost is one indexed
+// Complexity: for returned payload size p and ID/token bytes i+t, local time
+// is Theta(i+t+p) and auxiliary space is Theta(p); database cost is one indexed
 // update and one indexed state read on rejection.
 func (repository *PostgreSQL) Complete(ctx context.Context, lease Lease) (Job, error) {
 	if err := validateLeaseOperation(repository, ctx, lease); err != nil {
@@ -180,8 +192,8 @@ func (repository *PostgreSQL) Complete(ctx context.Context, lease Lease) (Job, e
 // policy.
 //
 // Complexity: for message bytes m plus ID/token bytes i+t, local validation
-// time O(m+i+t), Omega(i+t), tight Theta(m+i+t); auxiliary space O(1),
-// Omega(1), tight Theta(1); database cost is one indexed update and one indexed
+// time O(m+i+t+p), Omega(i+t+p), tight Theta(m+i+t+p) for returned payload p;
+// auxiliary space Theta(p); database cost is one indexed update and one indexed
 // state read on rejection.
 func (repository *PostgreSQL) Fail(ctx context.Context, lease Lease, failure Failure) (Job, error) {
 	if err := validateLeaseOperation(repository, ctx, lease); err != nil {
@@ -196,8 +208,9 @@ func (repository *PostgreSQL) Fail(ctx context.Context, lease Lease, failure Fai
 // leaseMutation runs one fenced update and classifies a rejected lease without
 // committing partial state.
 //
-// Complexity: local time and space are tight Theta(1); database cost is one
-// indexed update, one indexed state read on rejection, and one transaction.
+// Complexity: for returned payload size p, local time and auxiliary space are
+// tight Theta(p); database cost is one indexed update, one indexed state read
+// on rejection, and one transaction.
 func (repository *PostgreSQL) leaseMutation(ctx context.Context, lease Lease, statement string, arguments ...any) (Job, error) {
 	return transact(ctx, repository.database, func(transaction pgx.Tx) (Job, error) {
 		queryArguments := []any{lease.JobID, lease.Token}

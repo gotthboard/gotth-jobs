@@ -34,7 +34,10 @@ statement path, so a valid payload is not copied twice. On an idempotency
 conflict, one `SELECT` reads the fingerprint and complete job from the same row
 and Read Committed statement snapshot. `FOR KEY SHARE` retains that row's key
 identity until transaction end, preventing delete-and-replacement between
-authentication and return without blocking ordinary state-only updates.
+authentication and return without blocking ordinary state-only updates. A
+non-partial unique index on `(queue, idempotency_key)` makes those columns key
+columns for row locking; PostgreSQL's default distinct-`NULL` uniqueness still
+permits multiple jobs without an idempotency key.
 
 ## Claim mechanism
 
@@ -58,7 +61,10 @@ Complete, fail, and heartbeat use the exact `(job_id, lease_token)` pair and
 require a non-expired running lease. An old worker cannot mutate the record
 after another attempt receives a new token. External systems do not see this
 token unless the consumer deliberately carries it into a system with its own
-fencing contract.
+fencing contract. Heartbeat returns only an error and its update returns one
+boolean from PostgreSQL, so renewal response traffic and allocation do not
+scale with payload size. Complete and fail continue to return the transitioned
+job.
 
 ## Worker
 
@@ -81,4 +87,7 @@ durable ID/token reconciliation; its text omits every job field.
 Job rows, error text, and payloads read from PostgreSQL are untrusted. The
 consumer authenticates callers and decides who may enqueue, inspect, cancel,
 or redrive. The library validates every public input and copies payload bytes
-at the API boundary. It never logs payloads, idempotency keys, or errors.
+at the API boundary. Returned bytea payloads use pgx's binary `BytesScanner`
+hook: the scanner checks the borrowed source length before allocation and
+copies accepted bytes exactly once into library-owned memory. It never logs
+payloads, idempotency keys, or errors.

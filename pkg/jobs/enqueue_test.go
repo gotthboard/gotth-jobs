@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type stubRow struct {
@@ -31,6 +32,12 @@ func (row stubRow) Scan(destinations ...any) error {
 			*target = value.(string)
 		case *[]byte:
 			*target = append((*target)[:0], value.([]byte)...)
+		case pgtype.BytesScanner:
+			if err := target.ScanBytes(value.([]byte)); err != nil {
+				return err
+			}
+		case *bool:
+			*target = value.(bool)
 		case *int:
 			*target = value.(int)
 		case *int64:

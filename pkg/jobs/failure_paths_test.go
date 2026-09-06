@@ -169,13 +169,18 @@ func TestLifecycleDatabaseFailurePaths(t *testing.T) {
 	}
 
 	lease := Lease{JobID: "0123456789abcdef0123456789abcdef", Token: strings.Repeat("ab", 32)}
-	if _, err := (*PostgreSQL)(nil).Heartbeat(context.Background(), lease, time.Second); !errors.Is(err, ErrInvalid) {
+	if err := (*PostgreSQL)(nil).Heartbeat(context.Background(), lease, time.Second); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("nil heartbeat = %v", err)
 	}
 	if _, err := (*PostgreSQL)(nil).Fail(context.Background(), lease, Failure{}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("nil fail = %v", err)
 	}
 	tx := &stubTx{rows: []pgx.Row{stubRow{err: failure}}}
+	repository, _ = NewPostgreSQL(&stubDatabase{tx: tx})
+	if err := repository.Heartbeat(context.Background(), lease, time.Second); err == nil || !strings.Contains(err.Error(), "update job lease") {
+		t.Fatalf("heartbeat query failure = %v", err)
+	}
+	tx = &stubTx{rows: []pgx.Row{stubRow{err: failure}}}
 	repository, _ = NewPostgreSQL(&stubDatabase{tx: tx})
 	if _, err := repository.Complete(context.Background(), lease); err == nil || !strings.Contains(err.Error(), "update job lease") {
 		t.Fatalf("complete query failure = %v", err)
@@ -185,10 +190,10 @@ func TestLifecycleDatabaseFailurePaths(t *testing.T) {
 	if _, err := repository.Complete(context.Background(), lease); err == nil || !strings.Contains(err.Error(), "classify") {
 		t.Fatalf("complete classify failure = %v", err)
 	}
-	if _, err := repository.Heartbeat(context.Background(), lease, MaxLeaseDuration+1); !errors.Is(err, ErrInvalid) {
+	if err := repository.Heartbeat(context.Background(), lease, MaxLeaseDuration+1); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("heartbeat long lease = %v", err)
 	}
-	if _, err := repository.Heartbeat(context.Background(), lease, time.Second+time.Nanosecond); !errors.Is(err, ErrInvalid) {
+	if err := repository.Heartbeat(context.Background(), lease, time.Second+time.Nanosecond); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("heartbeat sub-microsecond lease = %v", err)
 	}
 	if _, err := repository.Fail(context.Background(), lease, Failure{Permanent: true, RetryAfter: time.Second}); !errors.Is(err, ErrInvalid) {

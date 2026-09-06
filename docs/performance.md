@@ -7,6 +7,8 @@ PostgreSQL mechanism remains a provisional candidate because its measured
 behavior is bounded enough for the first consumer and its cost remains visible:
 one short transaction per mutation, one returned payload copy, and an indexed
 `FOR UPDATE SKIP LOCKED` scan whose work grows with eligible and locked rows.
+Heartbeat is the exception to payload return: its response is one boolean, so
+renewal network traffic and allocation remain independent of payload size.
 
 Because there is no baseline/candidate optimization comparison, hotspot share
 `P`, hotspot speedup `S_hotspot`, and the Amdahl prediction
@@ -46,10 +48,12 @@ latencies come from the uninstrumented repair-source run at `72c6223`; the
 separate race-instrumented integration run is a correctness gate, not a timing
 source.
 CPU, I/O, allocation, and execution-plan attribution were not separately
-profiled because no optimization is proposed. The returned payload copy and
-database round trips are the expected visible costs. Re-profile when a real
-consumer supplies representative payloads, concurrency, retention, and
-service-level objectives.
+profiled because no optimization is proposed. Returned jobs make one bounded
+owning payload copy after checking source length; rejected oversized rows make
+no payload-sized allocation. Heartbeat returns no job payload. Database round
+trips and accepted result ownership are the expected visible costs. Re-profile
+when a real consumer supplies representative payloads, concurrency, retention,
+and service-level objectives.
 
 The later cursor-range repair at `9f6acc7` adds only validation before an
 invalid `ListDead` query and does not alter the successful query path. The

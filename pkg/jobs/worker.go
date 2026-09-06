@@ -13,7 +13,7 @@ import (
 // it; test doubles can model handler and shutdown behavior without a database.
 type Store interface {
 	Claim(context.Context, ClaimRequest) (Job, error)
-	Heartbeat(context.Context, Lease, time.Duration) (Job, error)
+	Heartbeat(context.Context, Lease, time.Duration) error
 	Complete(context.Context, Lease) (Job, error)
 	Fail(context.Context, Lease, Failure) (Job, error)
 }
@@ -129,9 +129,10 @@ func (worker Worker) validate() error {
 // exactly one success or failure transition while the lease remains valid.
 //
 // Complexity: local coordination time is O(h), Omega(1), where h is heartbeat
-// count; total time includes handler H plus h delegated heartbeat calls and one
-// cancellation/join plus one completion/failure call; auxiliary space O(1),
-// Omega(1), tight Theta(1) beyond the handler's own space.
+// count; total time includes handler H plus h delegated constant-response
+// heartbeat calls and one cancellation/join plus one completion/failure call;
+// auxiliary space O(1), Omega(1), tight Theta(1) beyond the handler's own
+// space.
 func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 	attemptContext, cancel := context.WithCancelCause(ctx)
 	stopHeartbeat := make(chan struct{})
@@ -209,7 +210,7 @@ func (worker Worker) heartbeat(ctx context.Context, stop <-chan struct{}, lease 
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			if _, err := worker.Store.Heartbeat(ctx, lease, worker.LeaseDuration); err != nil {
+			if err := worker.Store.Heartbeat(ctx, lease, worker.LeaseDuration); err != nil {
 				return err
 			}
 		}

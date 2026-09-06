@@ -11,7 +11,7 @@ import (
 
 type stubStore struct {
 	claim     func(context.Context, ClaimRequest) (Job, error)
-	heartbeat func(context.Context, Lease, time.Duration) (Job, error)
+	heartbeat func(context.Context, Lease, time.Duration) error
 	complete  func(context.Context, Lease) (Job, error)
 	fail      func(context.Context, Lease, Failure) (Job, error)
 }
@@ -20,7 +20,7 @@ func (store *stubStore) Claim(ctx context.Context, request ClaimRequest) (Job, e
 	return store.claim(ctx, request)
 }
 
-func (store *stubStore) Heartbeat(ctx context.Context, lease Lease, duration time.Duration) (Job, error) {
+func (store *stubStore) Heartbeat(ctx context.Context, lease Lease, duration time.Duration) error {
 	return store.heartbeat(ctx, lease, duration)
 }
 
@@ -64,7 +64,7 @@ func TestWorkerRunClaimsHandlesAndCompletes(t *testing.T) {
 			claims++
 			return job, nil
 		},
-		heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+		heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 		complete: func(_ context.Context, lease Lease) (Job, error) {
 			if lease != job.Lease {
 				t.Fatalf("complete lease = %+v", lease)
@@ -136,7 +136,7 @@ func TestWorkerAttemptClassifiesRetryPermanentAndPanic(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var got Failure
 			store := &stubStore{
-				heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+				heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 				complete:  func(context.Context, Lease) (Job, error) { t.Fatal("unexpected complete"); return Job{}, nil },
 				fail: func(_ context.Context, _ Lease, failure Failure) (Job, error) {
 					got = failure
@@ -158,7 +158,7 @@ func TestWorkerHeartbeatCancellationCancelsCooperativeHandler(t *testing.T) {
 	job := claimedJob(1)
 	handlerCanceled := make(chan struct{})
 	store := &stubStore{
-		heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return Job{}, ErrCanceled },
+		heartbeat: func(context.Context, Lease, time.Duration) error { return ErrCanceled },
 		complete:  func(context.Context, Lease) (Job, error) { t.Fatal("unexpected complete"); return Job{}, nil },
 		fail:      func(context.Context, Lease, Failure) (Job, error) { t.Fatal("unexpected fail"); return Job{}, nil },
 	}
@@ -182,10 +182,10 @@ func TestWorkerHandlerCompletionCancelsBlockedHeartbeat(t *testing.T) {
 	heartbeatStarted := make(chan struct{})
 	completeCalls := 0
 	store := &stubStore{
-		heartbeat: func(ctx context.Context, _ Lease, _ time.Duration) (Job, error) {
+		heartbeat: func(ctx context.Context, _ Lease, _ time.Duration) error {
 			close(heartbeatStarted)
 			<-ctx.Done()
-			return Job{}, ctx.Err()
+			return ctx.Err()
 		},
 		complete: func(context.Context, Lease) (Job, error) {
 			completeCalls++
@@ -227,7 +227,7 @@ func TestWorkerBoundsFailureText(t *testing.T) {
 	job := claimedJob(1)
 	var got Failure
 	store := &stubStore{
-		heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+		heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 		complete:  func(context.Context, Lease) (Job, error) { return Job{}, errors.New("unexpected") },
 		fail: func(_ context.Context, _ Lease, failure Failure) (Job, error) {
 			got = failure
@@ -303,7 +303,7 @@ func TestWorkerRunAndAttemptFailurePaths(t *testing.T) {
 	tests := []struct {
 		name      string
 		handler   Handler
-		heartbeat func(context.Context, Lease, time.Duration) (Job, error)
+		heartbeat func(context.Context, Lease, time.Duration) error
 		complete  func(context.Context, Lease) (Job, error)
 		fail      func(context.Context, Lease, Failure) (Job, error)
 		want      error
@@ -311,7 +311,7 @@ func TestWorkerRunAndAttemptFailurePaths(t *testing.T) {
 		{
 			name:      "lease lost heartbeat",
 			handler:   func(ctx context.Context, _ Job) error { <-ctx.Done(); return ctx.Err() },
-			heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return Job{}, ErrLeaseLost },
+			heartbeat: func(context.Context, Lease, time.Duration) error { return ErrLeaseLost },
 			complete:  func(context.Context, Lease) (Job, error) { return Job{}, nil },
 			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, nil },
 			want:      ErrLeaseLost,
@@ -319,33 +319,33 @@ func TestWorkerRunAndAttemptFailurePaths(t *testing.T) {
 		{
 			name:      "heartbeat context cancellation",
 			handler:   func(ctx context.Context, _ Job) error { <-ctx.Done(); return ctx.Err() },
-			heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return Job{}, context.Canceled },
+			heartbeat: func(context.Context, Lease, time.Duration) error { return context.Canceled },
 			complete:  func(context.Context, Lease) (Job, error) { return Job{}, nil },
 			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, nil },
 			want:      context.Canceled,
 		},
 		{
 			name: "complete canceled", handler: func(context.Context, Job) error { return nil },
-			heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+			heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 			complete:  func(context.Context, Lease) (Job, error) { return Job{}, ErrCanceled },
 			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, nil },
 		},
 		{
 			name: "complete failure", handler: func(context.Context, Job) error { return nil },
-			heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+			heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 			complete:  func(context.Context, Lease) (Job, error) { return Job{}, ordinary },
 			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, nil },
 			want:      ordinary,
 		},
 		{
 			name: "fail canceled", handler: func(context.Context, Job) error { return ordinary },
-			heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+			heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 			complete:  func(context.Context, Lease) (Job, error) { return Job{}, nil },
 			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, ErrCanceled },
 		},
 		{
 			name: "fail failure", handler: func(context.Context, Job) error { return ordinary },
-			heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+			heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 			complete:  func(context.Context, Lease) (Job, error) { return Job{}, nil },
 			fail:      func(context.Context, Lease, Failure) (Job, error) { return Job{}, ordinary },
 			want:      ordinary,
@@ -366,7 +366,7 @@ func TestWorkerRunAndAttemptFailurePaths(t *testing.T) {
 func TestWorkerContextAndConfigurationEdges(t *testing.T) {
 	job := claimedJob(1)
 	store := &stubStore{
-		heartbeat: func(context.Context, Lease, time.Duration) (Job, error) { return job, nil },
+		heartbeat: func(context.Context, Lease, time.Duration) error { return nil },
 		complete:  func(context.Context, Lease) (Job, error) { return job, nil },
 		fail:      func(context.Context, Lease, Failure) (Job, error) { return job, nil },
 	}

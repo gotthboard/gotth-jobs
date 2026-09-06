@@ -48,8 +48,7 @@ CREATE TABLE public.gotth_jobs (
 );
 
 CREATE UNIQUE INDEX gotth_jobs_idempotency
-    ON public.gotth_jobs (queue, idempotency_key)
-    WHERE idempotency_key IS NOT NULL;
+    ON public.gotth_jobs (queue, idempotency_key);
 
 CREATE INDEX gotth_jobs_claim
     ON public.gotth_jobs (queue, available_at, created_at, id)

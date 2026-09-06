@@ -54,3 +54,18 @@ func TestMigrationConstrainsStateAttemptCombinations(t *testing.T) {
 		}
 	}
 }
+
+func TestMigrationUsesNonPartialIdempotencyKeyIndex(t *testing.T) {
+	body, err := fs.ReadFile(jobs.Migrations(), "000001_jobs.sql")
+	if err != nil {
+		t.Fatalf("ReadFile() = %v", err)
+	}
+	index := `CREATE UNIQUE INDEX gotth_jobs_idempotency
+    ON public.gotth_jobs (queue, idempotency_key);`
+	if !strings.Contains(string(body), index) {
+		t.Fatalf("migration does not define the retaining unique key index:\n%s", body)
+	}
+	if strings.Contains(string(body), "WHERE idempotency_key IS NOT NULL") {
+		t.Fatal("idempotency key index is partial and cannot protect key-changing updates")
+	}
+}

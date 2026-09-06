@@ -22,6 +22,9 @@ canceled, or replaced lease. Cancellation invalidates the lease and cancels a
 cooperative in-process handler on its next heartbeat, but cannot reverse an
 effect the handler already performed.
 
+Heartbeat returns only an error and PostgreSQL returns one fixed-size success
+scalar; no job envelope or payload is sent back on a successful lease renewal.
+
 ## Boundary
 
 The first durable backend is PostgreSQL 17 using `FOR UPDATE SKIP LOCKED`, which
@@ -38,7 +41,9 @@ separate domain commit is reliable.
 An idempotency conflict reads the stored fingerprint and complete job from one
 row in one statement snapshot. A key-share lock retains that row identity
 through transaction end, so one request cannot authenticate an old row and
-return a replacement.
+return a replacement. The supporting unique index is non-partial so PostgreSQL
+treats queue and idempotency key changes as key updates; ordinary PostgreSQL
+`NULL` uniqueness still allows any number of jobs without a key.
 
 If `Claim` returns a nonzero job with `ErrCommitOutcomeUnknown`, only its ID
 and lease token may be used to reconcile the durable row. The job must not be

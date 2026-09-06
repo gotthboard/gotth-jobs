@@ -90,7 +90,6 @@ func TestHeartbeatCompleteAndFailTransitions(t *testing.T) {
 		operation func(*PostgreSQL) (Job, error)
 		wantState State
 	}{
-		{name: "heartbeat", row: runningJobRow(id, token, 1), operation: func(r *PostgreSQL) (Job, error) { return r.Heartbeat(context.Background(), lease, time.Minute) }, wantState: StateRunning},
 		{name: "complete", row: terminalJobRow(id, StateSucceeded, 1, ""), operation: func(r *PostgreSQL) (Job, error) { return r.Complete(context.Background(), lease) }, wantState: StateSucceeded},
 		{name: "retry", row: pendingJobRow(id, 1, "temporary"), operation: func(r *PostgreSQL) (Job, error) {
 			return r.Fail(context.Background(), lease, Failure{Message: "temporary", RetryAfter: time.Second})
@@ -106,6 +105,46 @@ func TestHeartbeatCompleteAndFailTransitions(t *testing.T) {
 			job, err := test.operation(repository)
 			if err != nil || job.State != test.wantState || tx.commits != 1 {
 				t.Fatalf("operation = (%+v, %v), commits=%d", job, err, tx.commits)
+			}
+		})
+	}
+}
+
+func TestHeartbeatReturnsOnlyScalarLeaseStatus(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	token := strings.Repeat("ab", 32)
+	tx := &stubTx{rows: []pgx.Row{stubRow{values: []any{true}}}}
+	repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
+
+	if err := repository.Heartbeat(context.Background(), Lease{JobID: id, Token: token}, time.Minute); err != nil {
+		t.Fatalf("Heartbeat() = %v", err)
+	}
+	if len(tx.statements) != 1 || !strings.Contains(tx.statements[0], "RETURNING true") {
+		t.Fatalf("Heartbeat SQL does not return one scalar: %q", tx.statements)
+	}
+	if strings.Contains(tx.statements[0], "payload") {
+		t.Fatalf("Heartbeat SQL returns payload: %q", tx.statements[0])
+	}
+}
+
+func TestHeartbeatClassifiesRejectedLease(t *testing.T) {
+	id := "0123456789abcdef0123456789abcdef"
+	lease := Lease{JobID: id, Token: strings.Repeat("ab", 32)}
+	tests := []struct {
+		name     string
+		stateRow pgx.Row
+		want     error
+	}{
+		{name: "missing", stateRow: stubRow{err: pgx.ErrNoRows}, want: ErrNotFound},
+		{name: "canceled", stateRow: stubRow{values: []any{string(StateCanceled)}}, want: ErrCanceled},
+		{name: "lost", stateRow: stubRow{values: []any{string(StateRunning)}}, want: ErrLeaseLost},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			tx := &stubTx{rows: []pgx.Row{stubRow{err: pgx.ErrNoRows}, test.stateRow}}
+			repository, _ := NewPostgreSQL(&stubDatabase{tx: tx})
+			if err := repository.Heartbeat(context.Background(), lease, time.Minute); !errors.Is(err, test.want) || tx.commits != 0 {
+				t.Fatalf("Heartbeat() = %v, want %v; commits=%d", err, test.want, tx.commits)
 			}
 		})
 	}
@@ -145,7 +184,7 @@ func TestLifecycleRejectsMalformedLeaseAndFailure(t *testing.T) {
 		}
 	}
 	validLease := Lease{JobID: "0123456789abcdef0123456789abcdef", Token: strings.Repeat("ab", 32)}
-	if _, err := repository.Heartbeat(context.Background(), validLease, time.Second-1); !errors.Is(err, ErrInvalid) {
+	if err := repository.Heartbeat(context.Background(), validLease, time.Second-1); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("Heartbeat(short) = %v", err)
 	}
 	if _, err := repository.Fail(context.Background(), validLease, Failure{RetryAfter: MaxRetryDelay + 1}); !errors.Is(err, ErrInvalid) {

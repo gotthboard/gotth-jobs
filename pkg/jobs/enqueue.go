@@ -15,7 +15,7 @@ id, queue, kind, payload, idempotency_key, request_fingerprint,
 max_attempts, available_at
 ) VALUES ($1, $2, $3, $4, NULLIF($5, ''), $6, $7,
 COALESCE($8::timestamptz, clock_timestamp()))
-ON CONFLICT (queue, idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
+ON CONFLICT (queue, idempotency_key) DO NOTHING
 RETURNING ` + jobColumns
 
 const idempotentJobSQL = `SELECT request_fingerprint, ` + jobColumns + ` FROM public.gotth_jobs

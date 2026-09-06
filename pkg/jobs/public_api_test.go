@@ -19,7 +19,7 @@ func compilePublicAPI(ctx context.Context, database jobs.Database, transaction p
 	job, _, _ := repository.Enqueue(ctx, request)
 	_, _, _ = repository.EnqueueTx(ctx, transaction, request)
 	claimed, _ := repository.Claim(ctx, jobs.ClaimRequest{Queue: "default", Worker: "worker", LeaseDuration: jobs.MinLeaseDuration})
-	_, _ = repository.Heartbeat(ctx, claimed.Lease, jobs.MaxLeaseDuration)
+	_ = repository.Heartbeat(ctx, claimed.Lease, jobs.MaxLeaseDuration)
 	_, _ = repository.Complete(ctx, claimed.Lease)
 	_, _ = repository.Fail(ctx, claimed.Lease, jobs.Failure{Permanent: true})
 	_, _ = repository.Get(ctx, job.ID)

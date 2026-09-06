@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const jobColumns = `id, queue, kind, payload, idempotency_key, state,
@@ -18,12 +19,37 @@ job.idempotency_key, job.state, job.attempts, job.max_attempts,
 job.available_at, job.created_at, job.updated_at, job.lease_token,
 job.lease_owner, job.lease_until, job.last_error, job.finished_at`
 
+type boundedPayloadScanner struct {
+	value []byte
+}
+
+var _ pgtype.BytesScanner = (*boundedPayloadScanner)(nil)
+
+// ScanBytes rejects an untrusted bytea length before allocation and makes the
+// one owning copy required beyond pgx's borrowed driver-memory lifetime.
+//
+// Complexity: for accepted payload size p, time and auxiliary space are tight
+// Theta(p); rejection time and auxiliary space are tight Theta(1).
+func (scanner *boundedPayloadScanner) ScanBytes(source []byte) error {
+	if len(source) > MaxPayloadBytes {
+		return fmt.Errorf("stored job payload exceeds the schema contract")
+	}
+	if source == nil {
+		scanner.value = nil
+		return nil
+	}
+	scanner.value = make([]byte, len(source))
+	copy(scanner.value, source)
+	return nil
+}
+
 // scanJob converts one untrusted database row into a copied public value and
 // rejects impossible states even if database constraints were bypassed.
 //
-// Complexity: for payload size p, time O(p), Omega(p), tight Theta(p);
-// auxiliary space O(p), Omega(p), tight Theta(p); one delegated row scan is
-// required.
+// Complexity: for payload size p, time and auxiliary space are O(p), Omega(1),
+// and tight Theta(p) for an accepted payload; one delegated row scan is
+// required. Oversized payload rejection is constant-time and allocates no
+// payload-sized storage.
 func scanJob(row pgx.Row) (Job, error) {
 	return scanJobRow(row, nil)
 }
@@ -31,9 +57,10 @@ func scanJob(row pgx.Row) (Job, error) {
 // scanJobWithFingerprint converts a fingerprint and complete job selected
 // from one row and statement snapshot into copied public values.
 //
-// Complexity: for payload size p, time O(p), Omega(p), tight Theta(p);
-// auxiliary space O(p), Omega(p), tight Theta(p); one delegated row scan is
-// required.
+// Complexity: for payload size p, time and auxiliary space are O(p), Omega(1),
+// and tight Theta(p) for an accepted payload; one delegated row scan is
+// required. Oversized payload rejection is constant-time and allocates no
+// payload-sized storage.
 func scanJobWithFingerprint(row pgx.Row) ([]byte, Job, error) {
 	var fingerprint []byte
 	job, err := scanJobRow(row, &fingerprint)
@@ -46,25 +73,27 @@ func scanJobWithFingerprint(row pgx.Row) ([]byte, Job, error) {
 // scanJobRow owns the shared decoding and validation for ordinary job rows
 // and idempotency rows with a leading fingerprint column.
 //
-// Complexity: for payload size p, time O(p), Omega(p), tight Theta(p);
-// auxiliary space O(p), Omega(p), tight Theta(p); one delegated row scan is
-// required.
+// Complexity: for payload size p, time and auxiliary space are O(p), Omega(1),
+// and tight Theta(p) for an accepted payload; one delegated row scan is
+// required. Oversized payload rejection is constant-time and allocates no
+// payload-sized storage.
 func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
 	var job Job
+	var payload boundedPayloadScanner
 	var state string
 	var key, token, owner *string
 	var leaseUntil, finishedAt *time.Time
 	var err error
 	if fingerprint == nil {
 		err = row.Scan(
-			&job.ID, &job.Queue, &job.Kind, &job.Payload, &key, &state,
+			&job.ID, &job.Queue, &job.Kind, &payload, &key, &state,
 			&job.Attempts, &job.MaxAttempts, &job.AvailableAt, &job.CreatedAt,
 			&job.UpdatedAt, &token, &owner, &leaseUntil, &job.LastError,
 			&finishedAt,
 		)
 	} else {
 		err = row.Scan(
-			fingerprint, &job.ID, &job.Queue, &job.Kind, &job.Payload, &key,
+			fingerprint, &job.ID, &job.Queue, &job.Kind, &payload, &key,
 			&state, &job.Attempts, &job.MaxAttempts, &job.AvailableAt,
 			&job.CreatedAt, &job.UpdatedAt, &token, &owner, &leaseUntil,
 			&job.LastError, &finishedAt,
@@ -73,6 +102,7 @@ func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
 	if err != nil {
 		return Job{}, err
 	}
+	job.Payload = payload.value
 	job.State = State(state)
 	if key != nil {
 		job.IdempotencyKey = *key
@@ -92,9 +122,6 @@ func scanJobRow(row pgx.Row, fingerprint *[]byte) (Job, error) {
 	job.AvailableAt = job.AvailableAt.UTC()
 	job.CreatedAt = job.CreatedAt.UTC()
 	job.UpdatedAt = job.UpdatedAt.UTC()
-	payload := make([]byte, len(job.Payload))
-	copy(payload, job.Payload)
-	job.Payload = payload
 	if err := validateStoredJob(job); err != nil {
 		return Job{}, err
 	}

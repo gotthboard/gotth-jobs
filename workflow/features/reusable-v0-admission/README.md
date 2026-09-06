@@ -33,3 +33,13 @@ repaired at exact source `9711e2b` with deterministic heartbeat races, exact
 borrowed-source bounds, fail-closed server-verified reset identity, complete
 lease/nullability shape checks, and corrected append-only workflow history.
 Fresh final reviews remain orchestrator-owned.
+
+The eighth independent review rejected candidate `2486b47`: scalar lease
+classification allocated an untrusted state before validation and treated
+unknown state as lease loss, `Counts` omitted unknown or NULL states, and the
+prior evidence did not retain literal commands or external-consumer source.
+The implementation defects are repaired at `4ec1970` with bounded
+borrowed-state scanning, exact five-state classification, count completeness,
+malformed PostgreSQL/allocation tests, and a hashed exact-source `set -x`
+transcript plus retained consumer source. Admission remains active pending two
+fresh orchestrator-owned reviews of the final candidate.

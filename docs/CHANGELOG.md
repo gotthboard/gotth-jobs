@@ -6,6 +6,50 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 07:23 CDT - Reject malformed scalar job states
+
+Implementation source: `4ec1970ed632f0306cc772bceeae8e15e17f5ab6`
+
+Affected files:
+
+- lease-state classification and bounded scanner tests
+- count completeness query and malformed-state tests
+- PostgreSQL query-mode allocation regression
+- public contracts, verification evidence, and workflow history
+
+Explanation:
+
+Lease failure classification now scans stored state through pgx's borrowed-byte
+hook with the longest allowed state as its bound before making one bounded
+string conversion. Only the five state-machine values are classified; NULL,
+oversized, and unknown values are returned as stored-data errors rather than
+ordinary lease loss. `Counts` now reads the total row count with the five known
+buckets and fails if their sum differs, preventing malformed rows from being
+silently omitted.
+
+Verification:
+
+- expected-red unit and real-pgx allocation evidence against rejected
+  candidate `2486b4732076976d4565e235de1d97c36b361951`
+- constrained local focused repeats, package, vet, formatting, and integration
+  compilation
+- retained exact-source `set -x` transcript for format, vet, unit, build, full
+  race, 50 affected race repeats, fuzz, and 97.4% statement coverage
+- PostgreSQL 17.10 race/coverage, three five-mode allocation runs, ten focused
+  race repeats, full performance matrix, and retained external-consumer source
+  plus exact invocation
+- `classifyLease` and `Counts` are 100% covered
+
+Risks / non-goals:
+
+- Corrupt stored data remains a storage error rather than a new public error
+  identity; existing public API and at-least-once behavior are unchanged.
+- pgx/network buffers remain runtime storage; the bound prevents a second
+  source-sized ownership conversion by the library scanner.
+- Two fresh independent reviews remain orchestrator-owned. This repair does
+  not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 06:27 CDT - Bound stored rows and harden integration reset
 
 Implementation source: `9711e2b00dc95ae3070090745d611b65eca686f3`

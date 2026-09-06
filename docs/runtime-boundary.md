@@ -71,6 +71,13 @@ pgx network/read storage is not counted as the library ownership copy. Stored
 mandatory timestamps must be
 present, and all mandatory or present optional timestamps are finite,
 microsecond-precision UTC values before crossing the public boundary.
+Lease-loss classification scans its non-NULL state through the same borrowed
+byte hook with the longest known state as its maximum, then accepts exactly
+`pending`, `running`, `succeeded`, `dead`, or `canceled`. NULL, oversized, or
+unknown state is a stored-data error and is never reported as ordinary lease
+loss. `Counts` compares the total row count with the sum of those five known
+buckets and fails rather than returning a partial observation when they
+differ.
 
 `EnqueueTx` issues one transaction-local isolation inspection and accepts only
 Read Committed. It does not commit, roll back, or retry. Repeatable Read and

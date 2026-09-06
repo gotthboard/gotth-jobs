@@ -76,7 +76,11 @@ round trips for each such statement. Stored rows with SQL NULL payloads or
 missing/invalid timestamps are rejected. Every stored text field and request
 fingerprint is length-checked through pgx's borrowed-byte scanner hook before
 one bounded ownership conversion; nullable key and lease fields preserve SQL
-NULL presence, and present-empty values are rejected.
+NULL presence, and present-empty values are rejected. Lease classification
+applies the same pre-allocation bound to the stored state scalar and accepts
+only the five documented states. `Counts` cross-checks those five buckets
+against the total row count, so unknown or NULL states fail as stored-data
+corruption instead of being omitted.
 
 ## Limits
 

@@ -120,6 +120,11 @@ buffers remain separate runtime storage. The fingerprint must be exactly 32
 bytes. SQL NULL payloads are distinct from empty bytea and are rejected;
 nullable key/token/owner presence is retained so present-empty values are
 rejected and a non-running job must have an entirely zero Lease.
+The non-job lease-classification state scalar uses the same bounded borrowed
+source mechanism and recognizes only the five state-machine values. `Counts`
+compares the complete row total with the sum of all known state buckets;
+unknown, NULL, or otherwise malformed state therefore fails closed instead of
+becoming lease loss or disappearing from observations.
 Mandatory stored timestamps must be present; every mandatory or present
 optional timestamp is normalized after pgx decoding and validated as finite,
 microsecond-precision UTC before exposure. Custom Store jobs must already use

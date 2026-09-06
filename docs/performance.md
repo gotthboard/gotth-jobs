@@ -148,3 +148,24 @@ Because the shared row scan changed, the complete exact-source matrix at
 | 100-row locked prefix | 1 | 16.594103 ms | N/A | N/A | N/A |
 
 This is confirmation evidence, not an optimization or latency guarantee.
+
+The Judge 8 repair extends borrowed-source validation to the scalar state read
+used after a rejected lease mutation. Three exact-source runs across all five
+supported pgx connection defaults rejected a 1 MiB state source at 5,963 to
+39,351 bytes/op without a library-owned source-sized string. Ten
+race-instrumented repeats measured 408,174 to 747,438 bytes/op, below the 1 MiB
+source; those figures include race, pgx, network, and transaction storage and
+are correctness evidence rather than allocator targets.
+
+The complete exact-source matrix at `4ec1970` was rerun because a production
+query and the count query changed:
+
+| Workload | Samples | p50 | p95 | p99 | Loop throughput |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| empty queue | 100 | 1.310979 ms | 2.369704 ms | 2.742109 ms | 598.16 ops/s |
+| 100-job small backlog, empty payload | 50 | 5.309876 ms | 5.572750 ms | 12.339297 ms | 106.08 ops/s |
+| 500-job typical backlog, 1 KiB payload | 200 | 6.008526 ms | 7.469857 ms | 8.555403 ms | 97.05 ops/s |
+| 20-job, 1 MiB payload boundary | 20 | 7.139892 ms | 8.117877 ms | 8.569803 ms | 72.14 ops/s |
+| 100-row locked prefix | 1 | 27.105679 ms | N/A | N/A | N/A |
+
+No optimization, latency guarantee, or speedup is claimed.

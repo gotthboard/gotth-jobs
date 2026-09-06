@@ -35,7 +35,9 @@ reaching pgx.
   terminal transitions.
 - `Get`, `Counts`, `ListDead`: bounded observation with payloads rejected by
   source length before one owning copy and a finite PostgreSQL timestamp
-  cursor.
+  cursor. `Counts` verifies that the total equals the sum of all five known
+  states and rejects malformed stored state rather than returning partial
+  totals.
 - `Redrive`: move exactly one dead job back to pending and reset attempts.
 - `RetryPolicy.Delay`: saturating exponential delay without overflow.
 - `Worker.Run`: serial claim/handle/heartbeat/acknowledgement loop that cancels
@@ -76,6 +78,9 @@ are invalid, and non-running rows require the complete Lease value to be zero.
 Row validation requires non-NULL mandatory timestamps and checks every
 mandatory or present optional timestamp for UTC, finite PostgreSQL range, and
 microsecond precision after pgx timestamps are normalized to UTC.
+The scalar lease-classification query also scans state as borrowed bytes with
+the longest allowed state as its bound; NULL, oversized, and values outside
+the five-state domain are stored-data errors rather than lease outcomes.
 
 ## Worker renewal budget
 

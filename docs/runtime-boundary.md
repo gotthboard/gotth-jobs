@@ -9,6 +9,11 @@
 - Go 1.26.6 and `github.com/jackc/pgx/v5` 5.10.0.
 - Timestamps and database-bound durations use PostgreSQL's microsecond
   precision. Finer values are rejected instead of being silently truncated.
+- Explicit enqueue availability is finite and inclusive from Go's proleptic
+  Gregorian `-4713-11-24T00:00:00Z` through
+  `294276-12-31T23:59:59.999999Z`, matching PostgreSQL 17's internal
+  `MIN_TIMESTAMP` and exclusive `END_TIMESTAMP` bounds. Values outside that
+  range are rejected before pgx binary encoding.
 
 ## Authoritative contracts read before design
 

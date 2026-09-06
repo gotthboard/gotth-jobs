@@ -8,7 +8,8 @@ attempt, lease, failure, and timestamp columns. A partial unique index on
 fingerprint covers queue, kind, payload, maximum attempts, and requested
 availability so key reuse with different semantics fails closed. Availability
 uses signed Unix seconds plus nanoseconds rather than the range-limited
-`time.Time.UnixNano` representation.
+`time.Time.UnixNano` representation, but public enqueue validation admits only
+finite values the pinned PostgreSQL and pgx boundary can round-trip.
 
 ## Public operations
 

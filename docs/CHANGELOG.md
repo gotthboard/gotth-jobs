@@ -6,6 +6,43 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 00:51 CDT — Enforce PostgreSQL time and attempt boundaries
+
+Commit: `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`
+
+Affected files:
+
+- `pkg/jobs/values.go`
+- `pkg/jobs/rows.go`
+- `pkg/jobs/migrations/000001_jobs.sql`
+- focused unit, migration, and PostgreSQL integration tests
+- runtime, verification, performance, and workflow records
+
+Explanation:
+
+Reject explicit availability outside PostgreSQL 17's finite timestamp range
+before pgx can wrap the binary microsecond value. Reject impossible
+state/attempt pairs at both the untrusted row boundary and in the unreleased
+initial schema: pending attempts remain below the maximum; running, succeeded,
+and dead rows require an admitted attempt; canceled rows may remain at zero.
+
+Verification:
+
+- expected-red regressions for the exact pgx wrap fixture, row validation, and
+  migration constraint
+- focused local tests and vet under Go 1.26.6 with `GOMAXPROCS=2` and `-p=1`
+- exact clean-revision unit, race, 50-repeat race, coverage, and fuzz gates on
+  `development`
+- PostgreSQL 17.10 integration against the pinned image, including exact time
+  endpoint round trips and all 16 state/attempt boundary combinations
+- performance, external-consumer, clean-clone, and Graphify gates
+
+Risks / non-goals:
+
+- Delivery remains at least once; handler idempotency remains consumer-owned.
+- Fresh independent admission reviews remain pending and orchestrator-owned.
+- No tag, consumer pin, remote push, live database, or deployment changes.
+
 ### 2026-09-03 09:52 CDT — Preserve temporal and worker boundaries
 
 Commit: `d800418f2013b8e8e24c61d9baed38e10dffe26e`

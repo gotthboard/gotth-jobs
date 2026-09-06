@@ -45,6 +45,8 @@ separate domain commit is reliable.
 - attempts: 1 through 100;
 - lease: 1 second through 1 hour;
 - retry delay: zero through 24 hours;
+- scheduled availability: finite PostgreSQL `timestamptz` range at microsecond
+  precision;
 - dead-letter page: 1 through 100 records.
 
 ## Status

@@ -21,7 +21,9 @@ canceled <-----------+ cancel
 `pending`, `running`, `succeeded`, `dead`, and `canceled` are the only states.
 The database constrains lease columns to exist only in `running` and terminal
 timestamps only in terminal states. Attempts increment when a claim is
-admitted, including a claim after lease expiry.
+admitted, including a claim after lease expiry. Pending rows have fewer than
+`max_attempts`; running, succeeded, and dead rows have at least one attempt;
+canceled rows may have zero or more attempts through `max_attempts`.
 
 ## Claim mechanism
 

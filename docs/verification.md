@@ -1,29 +1,30 @@
 # Verification status
 
-Current implementation verification:
+Current repair verification:
 
-- Go 1.26.6 format, vet, unit, race, and coverage gates pass locally.
-- Statement coverage is 96.5% under the canonical local compiler and 96.0%
-  under the remote integration compiler. Residual branches are injected
-  entropy failure, impossible embedded-filesystem failure, and defensive
-  invalid/error paths; no claimed state transition lacks direct or PostgreSQL
-  integration coverage.
-- PostgreSQL 17.10 integration passes against the exact pinned image, including
-  UTF8 and version oracles, transaction rollback, concurrent idempotency,
-  concurrent claim, lease replacement, stale-token rejection, heartbeat,
-  retry, exhaustion, cancellation, dead listing, redrive, counts, future
-  scheduling, and the worker loop.
-- Fuzz admissions on the admitted source executed 111,741 envelope inputs and
-  45,631 diagnostic-text inputs without a product failure.
-- The performance matrix and its limitations are in `docs/performance.md`.
-- Fifty consecutive race runs pass.
-- A clean clone at the admitted source revision passes readonly race, vet, and
-  build gates; a separate external module imports and compiles the public API.
-- Graphify reports 214 nodes and 491 edges with no dangling endpoints,
-  self-loops, exact duplicate edges, or same-endpoint collision groups.
-- Two cold reviews failed and were repaired; two subsequent fresh cold reviews
-  are recorded as clean in feature evidence.
+- Repair source `72c62231fa4a0012ceef0a9c5ff61ff05feaf859`
+  passed focused local package tests and vet under Go 1.26.6 with
+  `GOMAXPROCS=2` and `-p=1`.
+- An exact clean clone on `development` passed format, vet, unit, build, race,
+  50 repeated race runs, coverage, and two five-second fuzz admissions.
+- Clean-clone statement coverage is 96.3%; PostgreSQL integration coverage is
+  96.5%. `validateEnqueue` is 100% covered. `validateStoredJob` is 95.5%
+  covered; its residual is the preexisting terminal-timestamp rejection, which
+  one older malformed fixture now reaches the new state/attempt rejection
+  before. Every legal and illegal state/attempt boundary has direct coverage.
+- PostgreSQL 17.10 integration passes against the pinned image, including exact
+  availability endpoint round trips and all 16 state/attempt boundary pairs,
+  in addition to the existing transaction, concurrency, fencing, lifecycle,
+  cancellation, dead-letter, and worker cases.
+- Fuzz admissions executed 66,722 envelope inputs and 342,657 diagnostic-text
+  inputs without a product failure.
+- Performance, separate external-consumer compilation, and Graphify integrity
+  gates pass. The measured matrix and limitations are in
+  `docs/performance.md`.
+- The prior clean review files are historical and do not admit this repair.
+  Two attributable fresh independent reviews of the final candidate remain
+  required and are orchestrator-owned.
 
-Exact commands, revisions, hashes, residual coverage, environment differences,
-and review findings are recorded under
+Exact commands, artifact hashes, environment differences, and the remaining
+review gate are recorded under
 `workflow/features/reusable-v0-admission/evidence/`.

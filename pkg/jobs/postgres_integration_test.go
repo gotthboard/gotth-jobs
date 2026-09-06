@@ -188,6 +188,34 @@ $5, $6, $7, $8)`, fmt.Sprintf("%032x", index+1), make([]byte, 32),
 	}
 }
 
+func TestPostgreSQLListDeadRejectsWrappedCursor(t *testing.T) {
+	_, repository := integrationRepository(t)
+	ctx := context.Background()
+	job, _, err := repository.Enqueue(ctx, jobs.EnqueueRequest{
+		Queue: "cursor", Kind: "wrapped", MaxAttempts: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repository.Claim(ctx, jobs.ClaimRequest{
+		Queue: "cursor", Worker: "worker", LeaseDuration: time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repository.Fail(ctx, claimed.Lease, jobs.Failure{Permanent: true}); err != nil {
+		t.Fatal(err)
+	}
+	wrapped := time.Unix(18_447_690_758_509, 551_616_000).UTC()
+	page, err := repository.ListDead(ctx, "cursor", &jobs.DeadCursor{
+		FinishedAt: wrapped,
+		ID:         job.ID,
+	}, 1)
+	if !errors.Is(err, jobs.ErrInvalid) || page != nil {
+		t.Fatalf("ListDead(wrapped cursor) = (%+v, %v), want (nil, ErrInvalid)", page, err)
+	}
+}
+
 func TestPostgreSQLConcurrentIdempotentEnqueueCreatesOneJob(t *testing.T) {
 	_, repository := integrationRepository(t)
 	ctx := context.Background()

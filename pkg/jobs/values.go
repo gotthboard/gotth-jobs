@@ -81,13 +81,23 @@ func validateEnqueue(request EnqueueRequest) error {
 	if request.MaxAttempts < 1 || request.MaxAttempts > MaxAttempts {
 		return fmt.Errorf("%w: max attempts must be between 1 and %d", ErrInvalid, MaxAttempts)
 	}
-	if !request.AvailableAt.IsZero() && (request.AvailableAt.Location() != time.UTC ||
-		request.AvailableAt.Nanosecond()%int(time.Microsecond) != 0 ||
-		request.AvailableAt.Before(minimumPostgreSQLTimestamp) ||
-		request.AvailableAt.After(maximumPostgreSQLTimestamp)) {
+	if !request.AvailableAt.IsZero() && !isPostgreSQLTimestamp(request.AvailableAt) {
 		return fmt.Errorf("%w: availability must use UTC, PostgreSQL microsecond precision, and the finite timestamp range", ErrInvalid)
 	}
 	return nil
+}
+
+// isPostgreSQLTimestamp reports whether value is a nonzero UTC timestamp that
+// the pinned PostgreSQL and pgx boundary can represent without truncation or
+// wraparound.
+//
+// Complexity: time O(1), Omega(1), tight Theta(1); auxiliary space O(1),
+// Omega(1), tight Theta(1).
+func isPostgreSQLTimestamp(value time.Time) bool {
+	return !value.IsZero() && value.Location() == time.UTC &&
+		value.Nanosecond()%int(time.Microsecond) == 0 &&
+		!value.Before(minimumPostgreSQLTimestamp) &&
+		!value.After(maximumPostgreSQLTimestamp)
 }
 
 // cloneEnqueue isolates caller-owned payload memory from subsequent mutation.

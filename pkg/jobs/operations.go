@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -89,7 +88,8 @@ func (repository *PostgreSQL) Counts(ctx context.Context, queue string) (Counts,
 // Complexity: for n returned jobs with total payload bytes p and queue/ID
 // validation bytes v, local time O(n+p+v), Omega(v), tight Theta(n+p+v);
 // auxiliary space O(n+p), Omega(n), tight Theta(n+p); database cost is one
-// indexed ordered scan bounded by limit.
+// indexed ordered scan bounded by limit; cursor timestamp validation is
+// constant-time.
 func (repository *PostgreSQL) ListDead(ctx context.Context, queue string, cursor *DeadCursor, limit int) ([]Job, error) {
 	if err := validateRead(repository, ctx); err != nil {
 		return nil, err
@@ -103,7 +103,7 @@ func (repository *PostgreSQL) ListDead(ctx context.Context, queue string, cursor
 	var cursorTime any
 	var cursorID string
 	if cursor != nil {
-		if cursor.FinishedAt.IsZero() || cursor.FinishedAt.Location() != time.UTC || cursor.FinishedAt.Nanosecond()%int(time.Microsecond) != 0 {
+		if !isPostgreSQLTimestamp(cursor.FinishedAt) {
 			return nil, fmt.Errorf("%w: dead-letter cursor time is invalid", ErrInvalid)
 		}
 		if err := validateJobID(cursor.ID); err != nil {

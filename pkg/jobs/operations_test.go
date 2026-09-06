@@ -99,6 +99,45 @@ func TestListDeadClosesRowsAndHonorsCursor(t *testing.T) {
 	}
 }
 
+func TestListDeadCursorPostgreSQLRange(t *testing.T) {
+	minimum := time.Date(-4713, time.November, 24, 0, 0, 0, 0, time.UTC)
+	maximum := time.Date(294276, time.December, 31, 23, 59, 59, 999999000, time.UTC)
+	tests := []struct {
+		name       string
+		finishedAt time.Time
+		valid      bool
+	}{
+		{name: "minimum", finishedAt: minimum, valid: true},
+		{name: "maximum", finishedAt: maximum, valid: true},
+		{name: "below minimum", finishedAt: minimum.Add(-time.Microsecond)},
+		{name: "above maximum", finishedAt: maximum.Add(time.Microsecond)},
+		{name: "pgx codec wraps to Y2K", finishedAt: time.Unix(18_447_690_758_509, 551_616_000).UTC()},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			database := &stubDatabase{rows: &stubRows{}}
+			repository, _ := NewPostgreSQL(database)
+			_, err := repository.ListDead(context.Background(), "default", &DeadCursor{
+				FinishedAt: test.finishedAt,
+				ID:         "0123456789abcdef0123456789abcdef",
+			}, 1)
+			if test.valid && err != nil {
+				t.Fatalf("ListDead(%v) = %v", test.finishedAt, err)
+			}
+			if !test.valid && !errors.Is(err, ErrInvalid) {
+				t.Fatalf("ListDead(%v) = %v, want ErrInvalid", test.finishedAt, err)
+			}
+			wantQueries := 0
+			if test.valid {
+				wantQueries = 1
+			}
+			if len(database.queryArguments) != wantQueries {
+				t.Fatalf("ListDead(%v) issued %d queries, want %d", test.finishedAt, len(database.queryArguments), wantQueries)
+			}
+		})
+	}
+}
+
 func TestCancelAndRedriveStateTransitions(t *testing.T) {
 	id := "0123456789abcdef0123456789abcdef"
 	tests := []struct {

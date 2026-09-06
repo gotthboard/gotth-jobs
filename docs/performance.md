@@ -55,3 +55,8 @@ The later cursor-range repair at `9f6acc7` adds only validation before an
 invalid `ListDead` query and does not alter the successful query path. The
 performance matrix was therefore not rerun; these measurements remain ancestor
 evidence, not exact-source timing for that repair.
+
+The later `6655331` repair changes Claim only after a commit error and changes
+worker coordination only after handler return. It does not alter successful
+Claim SQL or the measured claim/complete workload, so the performance matrix
+was not rerun and remains ancestor evidence.

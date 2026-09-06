@@ -32,7 +32,7 @@ risk = "critical"
 assurance = "traceable-tests"
 created_at = "2026-09-03T13:57:36Z"
 activated_at = "2026-09-03T13:57:36Z"
-updated_at = "2026-09-06T06:51:47Z"
+updated_at = "2026-09-06T07:29:56Z"
 folder = "workflow/features/reusable-v0-admission"
 source_path = "pkg/jobs"
 worktree = "/home/linus/.openclaw/workspace/.artifacts/worktrees/gotth-jobs-reusable"
@@ -40,7 +40,7 @@ branch = "feature/reusable-v0-admission"
 scope = ["Durable PostgreSQL 17 job envelopes", "Atomic enqueue", "Lease fencing", "Heartbeats", "Bounded retries", "Cancellation", "Dead-letter operations", "Serial worker", "MIT licensing"]
 non_goals = ["Exactly-once external side effects", "Cron scheduling or workflow DAGs", "Product event policy", "Automatic migrations or retention", "Databases other than PostgreSQL 17"]
 affected_files = ["**"]
-invariants = ["All work is at least once", "Unknown commit outcomes are never retried", "Stale leases cannot mutate job state", "Payload meaning and authorization remain consumer-owned", "No live database or deployment is mutated"]
+invariants = ["All work is at least once", "Unknown commit outcomes are never retried and returned handles are reconciliation-only", "Stale leases cannot mutate job state", "Payload meaning and authorization remain consumer-owned", "No live database or deployment is mutated"]
 acceptance = ["All requirements trace to code, tests, and evidence", "Format, vet, race, repeated race, coverage, fuzz, PostgreSQL 17, clean-clone, performance, graph, and two Judge gates pass"]
 
 [feature.reusable-v0-admission.rollback]

@@ -17,8 +17,9 @@
 | JOB-013 | distribution | `LICENSE` and policy docs | license inventory | covered |
 
 Statement coverage is 96.3% for the clean-clone unit suite and 96.5% with
-PostgreSQL integration at current repair source `9f6acc7`. The shared
-PostgreSQL timestamp predicate is 100% covered, and enqueue plus dead-cursor
-range defects have direct boundary tests. Exact residual branches are recorded
-in `docs/verification.md`; coverage is iteration evidence, not the admission
+PostgreSQL integration at current repair source `6655331`. Claim's populated
+commit-error return and every changed heartbeat teardown/classification
+statement have nonzero counts. The shared PostgreSQL timestamp predicate
+remains 100% covered. Exact residual branches are recorded in
+`docs/verification.md`; coverage is iteration evidence, not the admission
 oracle.

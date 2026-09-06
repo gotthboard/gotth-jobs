@@ -6,6 +6,49 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 02:29 CDT — Preserve Claim reconciliation and stop heartbeats
+
+Commit: `6655331ae4e3b7509b826a03db11c36cee9a6ca2`
+
+Affected files:
+
+- `pkg/jobs/lifecycle.go`
+- `pkg/jobs/worker.go`
+- focused lifecycle, transaction-wrapper, and worker tests
+- public contract and workflow evidence documents
+
+Explanation:
+
+Preserve the exact job ID and lease token when Claim produced a candidate but
+transaction commit returned `ErrCommitOutcomeUnknown`. That value is
+reconciliation-only while the error is non-nil. After a handler returns, stop
+and cancel its heartbeat context before joining the heartbeat goroutine;
+distinguish that local teardown from parent cancellation and genuine heartbeat
+failure so successful work can still be acknowledged.
+
+Verification:
+
+- expected-red tests for a discarded commit-unknown fencing handle and a
+  context-aware heartbeat that blocked teardown
+- focused local package tests and vet with `GOMAXPROCS=2` and `-p=1`
+- exact clean-source format, vet, unit, build, full race, 50 focused race
+  repeats, and 96.3% statement coverage on `development`
+- PostgreSQL 17.10 race and coverage integration at 96.5% against the pinned
+  image digest
+- every changed production statement covered; exact preexisting residual
+  blocks recorded in verification evidence
+
+Risks / non-goals:
+
+- A Job returned with `ErrCommitOutcomeUnknown` does not authorize handling;
+  durable state and the exact token must be confirmed first.
+- Delivery remains at least once. No automatic retry was added.
+- External-consumer, fuzz, performance, and graph gates were not rerun because
+  public signatures, steady-state SQL, and dependency shape are unchanged.
+- Two fresh independent clean reviews remain orchestrator-owned. This repair
+  does not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 01:51 CDT — Correct Claim lock-cardinality contract
 
 Commit: `b54cd4f3c385cbe0df1158c2a866efe7fbc216d1`

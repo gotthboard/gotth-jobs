@@ -35,9 +35,17 @@ Consumers that need atomic domain mutation plus enqueue call `EnqueueTx` on
 their existing `pgx.Tx`. The library does not pretend that enqueueing after a
 separate domain commit is reliable.
 
+An idempotency conflict reads the stored fingerprint and complete job from one
+row in one statement snapshot. A key-share lock retains that row identity
+through transaction end, so one request cannot authenticate an old row and
+return a replacement.
+
 If `Claim` returns a nonzero job with `ErrCommitOutcomeUnknown`, only its ID
 and lease token may be used to reconcile the durable row. The job must not be
 handled until the committed state and exact token are confirmed.
+`Worker.Run` exposes the same value through `ClaimReconciliationError`, found
+with `errors.As`; `ReconciliationJob` is likewise reconciliation-only and the
+error text never includes the lease token.
 
 ## Limits
 

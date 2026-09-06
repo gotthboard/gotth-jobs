@@ -25,6 +25,17 @@ admitted, including a claim after lease expiry. Pending rows have fewer than
 `max_attempts`; running, succeeded, and dead rows have at least one attempt;
 canceled rows may have zero or more attempts through `max_attempts`.
 
+## Enqueue mechanism
+
+Public enqueue entry points validate all caller-controlled bounds before
+copying payload memory. `Enqueue` completes that preparation before opening
+its library-owned transaction; both entry points then use one private prepared
+statement path, so a valid payload is not copied twice. On an idempotency
+conflict, one `SELECT` reads the fingerprint and complete job from the same row
+and Read Committed statement snapshot. `FOR KEY SHARE` retains that row's key
+identity until transaction end, preventing delete-and-replacement between
+authentication and return without blocking ordinary state-only updates.
+
 ## Claim mechanism
 
 A short Read Committed transaction first marks expired attempts dead when they
@@ -59,6 +70,11 @@ genuine heartbeat failures remain visible. Losing or canceling the lease
 cancels the handler context. Handler panic becomes a bounded retryable failure
 instead of terminating the worker process. Shutdown stops heartbeats and
 leaves the lease to expire; it does not falsely record a handler failure.
+
+If Claim returns a nonzero job with `ErrCommitOutcomeUnknown`, `Worker.Run`
+returns `ClaimReconciliationError` without invoking the handler. The typed
+error unwraps the original failure and exposes the unconfirmed job only for
+durable ID/token reconciliation; its text omits every job field.
 
 ## Trust boundary
 

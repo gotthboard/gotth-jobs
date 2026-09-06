@@ -33,7 +33,13 @@
 ## Correctness-relevant limits
 
 Application-level byte and count limits are fixed in the README and validated
-at every exported boundary. One `Claim` can lock and update up to 100 expired,
+at every exported boundary. Enqueue rejects an oversized payload before
+copying it, and library-owned `Enqueue` rejects it before opening a
+transaction. An idempotency fallback selects the fingerprint and complete job
+from one row and snapshot under `FOR KEY SHARE`. That lock remains through
+transaction end and prevents deletion or key replacement after the row is
+authenticated; non-key state updates remain compatible with the lock. One
+`Claim` can lock and update up to 100 expired,
 exhausted running rows and can independently lock and update at most one
 disjoint eligible candidate row. Those locks remain until the short claim
 transaction ends, so the statement can hold at most 101 row locks and can
@@ -56,6 +62,9 @@ rollback contexts detached from caller cancellation. Commit failures are
 reported as `ErrCommitOutcomeUnknown`; no implicit retry occurs. A nonzero Job
 returned by Claim under that error carries only the ID and lease token needed
 for reconciliation and must not be handled before durable confirmation.
+When the same result reaches `Worker.Run`, it is returned in a
+`ClaimReconciliationError`; the original error remains traversable, the
+handler does not run, and the error string omits the secret token.
 
 Handler return closes the heartbeat stop signal and cancels the per-attempt
 context before the worker joins the heartbeat goroutine. Context cancellation

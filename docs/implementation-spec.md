@@ -16,8 +16,10 @@ cursors use the same timestamp predicate before reaching pgx.
 
 - `Migrations`: return the immutable migration filesystem.
 - `NewPostgreSQL`: validate and retain the minimal database contract.
-- `Enqueue` / `EnqueueTx`: validate, copy, fingerprint, insert, or return an
-  exact idempotent duplicate. Only `Enqueue` owns commit classification.
+- `Enqueue` / `EnqueueTx`: validate before copying, copy a bounded payload
+  once, fingerprint, insert, or return an exact idempotent duplicate. The
+  duplicate fingerprint and job come from one retaining row read. Only
+  `Enqueue` owns commit classification.
 - `Claim`: reap exhausted expired attempts and atomically claim one eligible
   row with a fresh random token. A produced job returned with
   `ErrCommitOutcomeUnknown` exposes its ID and token for reconciliation only.
@@ -32,7 +34,9 @@ cursors use the same timestamp predicate before reaching pgx.
 - `Redrive`: move exactly one dead job back to pending and reset attempts.
 - `RetryPolicy.Delay`: saturating exponential delay without overflow.
 - `Worker.Run`: serial claim/handle/heartbeat/acknowledgement loop that cancels
-  and joins the per-attempt heartbeat after handler return.
+  and joins the per-attempt heartbeat after handler return. A nonzero
+  commit-unknown Claim becomes `ClaimReconciliationError`; the handler does not
+  run and `ReconciliationJob` is not execution authorization.
 - `Permanent`: mark a handler error as non-retryable without changing it for
   `errors.Is`/`errors.As` traversal.
 
@@ -41,7 +45,9 @@ cursors use the same timestamp predicate before reaching pgx.
 Exported sentinels are `ErrNotFound`, `ErrNoJob`, `ErrLeaseLost`,
 `ErrCanceled`, `ErrStateConflict`, `ErrIdempotencyConflict`,
 `ErrCommitOutcomeUnknown`, and `ErrInvalid`. Errors wrap a sentinel and retain
-the underlying cause where one exists.
+the underlying cause where one exists. `ClaimReconciliationError` is an
+exported typed Worker error that unwraps the original commit-unknown Claim
+error while keeping its reconciliation job out of `Error()` text.
 
 ## Production-unit order
 

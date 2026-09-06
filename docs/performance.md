@@ -60,3 +60,22 @@ The later `6655331` repair changes Claim only after a commit error and changes
 worker coordination only after handler return. It does not alter successful
 Claim SQL or the measured claim/complete workload, so the performance matrix
 was not rerun and remains ancestor evidence.
+
+The `62d565a` repair moves valid Enqueue preparation before `BeginTx`, changes
+the idempotent-conflict read, and adds a public Worker error type. Because the
+enqueue allocation order changed, the complete matrix was rerun against exact
+clean source on the same designated host and pinned PostgreSQL image. The
+workloads do not use idempotency keys, so they exercise the moved valid enqueue
+path but not the conflict-only retaining read.
+
+| Workload | Samples | p50 | p95 | p99 | Loop throughput |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| empty queue | 100 | 794.121 us | 947.374 us | 1.128226 ms | 1245.20 ops/s |
+| 100-job small backlog, empty payload | 50 | 3.670492 ms | 8.327549 ms | 8.425270 ms | 114.11 ops/s |
+| 500-job typical backlog, 1 KiB payload | 200 | 4.171220 ms | 4.501594 ms | 5.340076 ms | 130.53 ops/s |
+| 20-job, 1 MiB payload boundary | 20 | 4.944501 ms | 7.527697 ms | 7.935184 ms | 92.14 ops/s |
+| 100-row locked prefix | 1 | 22.865428 ms | N/A | N/A | N/A |
+
+This is confirmation evidence, not an optimization claim. No formal latency
+threshold or representative consumer workload exists yet; the original
+provisional admission and re-profile trigger remain unchanged.

@@ -6,6 +6,53 @@ Released sections use Semantic Versioning; unreleased work remains under
 
 ## Unreleased
 
+### 2026-09-06 03:18 CDT — Bind idempotency snapshots and Worker reconciliation
+
+Commit: `62d565aa1d3f4ebf19cc4d39bf87d2764c676c8b`
+
+Affected files:
+
+- enqueue preparation, conflict fallback, and shared row scanning
+- `ClaimReconciliationError` and `Worker.Run`
+- focused unit, PostgreSQL, public API, and external-consumer tests
+- public contract, performance, verification, and workflow records
+
+Explanation:
+
+Read an idempotent duplicate's fingerprint and complete job from one row and
+Read Committed statement snapshot, retaining that row identity with
+`FOR KEY SHARE` through transaction end. Validate all enqueue bounds before
+copying payload bytes; library-owned Enqueue now prepares one bounded copy
+before `BeginTx` and executes a private prepared helper without recopying.
+When Worker receives a nonzero Claim result with `ErrCommitOutcomeUnknown`,
+return `ClaimReconciliationError` with the reconciliation-only Job while
+preserving error traversal and omitting the lease token from error text.
+
+Verification:
+
+- expected-red replacement-interleaving, oversized allocation/transaction,
+  and Worker value-loss regressions
+- focused local package tests, 10 repeats, vet, and integration-tag compile
+  with `GOMAXPROCS=2` and `-p=1`
+- exact clean-source format, vet, unit, build, full race, 50 affected race
+  repeats, and 96.9% statement coverage on `development`
+- PostgreSQL 17.10 race and coverage integration plus 10 repeated row-lock
+  interleavings against the pinned image digest
+- exact-source standalone external-consumer test/build and performance matrix
+- every defect-specific path is covered; exact unrelated/preexisting gaps are
+  recorded in verification evidence
+
+Risks / non-goals:
+
+- The retaining read can wait behind a writer of the conflicting row; it does
+  not promise exactly-once work or external side effects.
+- A reconciliation Job does not authorize handling until durable ID/token
+  state is confirmed.
+- Fuzz and graph gates were not invalidated and remain ancestor evidence.
+- Two fresh independent reviews remain orchestrator-owned. This repair does
+  not claim final admission.
+- No push, merge, tag, release, pull request, deployment, or remote change.
+
 ### 2026-09-06 02:29 CDT — Preserve Claim reconciliation and stop heartbeats
 
 Commit: `6655331ae4e3b7509b826a03db11c36cee9a6ca2`

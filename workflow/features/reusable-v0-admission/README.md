@@ -7,5 +7,8 @@ repaired with exact-source evidence. The second independent review found and
 prompted correction of a false runtime lock-cardinality claim. The third
 independent review found Claim reconciliation-value loss and heartbeat teardown
 liveness defects; both are repaired with exact-source race and PostgreSQL
-evidence. Admission remains active until two fresh orchestrator-owned reviews
-pass on the final candidate.
+evidence. The fourth independent review found an idempotency snapshot race,
+prevalidation payload allocation, and Worker reconciliation-value loss; all
+three are repaired with exact-source race, PostgreSQL, external-consumer, and
+performance evidence. Admission remains active until two fresh
+orchestrator-owned reviews pass on the final candidate.

@@ -3,10 +3,12 @@ package jobs
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type stubStore struct {
@@ -423,6 +425,66 @@ func TestWorkerBoundsFailureText(t *testing.T) {
 	}
 	if len(got.Message) > MaxFailureBytes || strings.ContainsRune(got.Message, 0) || !strings.HasSuffix(got.Message, "…") {
 		t.Fatalf("bounded failure is invalid: bytes=%d suffix=%q", len(got.Message), got.Message[len(got.Message)-3:])
+	}
+}
+
+type preallocatedError struct {
+	message string
+	calls   int
+}
+
+func (err *preallocatedError) Error() string {
+	err.calls++
+	return err.message
+}
+
+func TestBoundedFailureAllocationIndependentOfSourceLength(t *testing.T) {
+	invalid := make([]byte, 1<<20)
+	for index := range invalid {
+		if index%2 == 0 {
+			invalid[index] = 0xff
+		} else {
+			invalid[index] = 'x'
+		}
+	}
+	tests := []struct {
+		name     string
+		message  string
+		wantRune bool
+	}{
+		{name: "valid", message: strings.Repeat("x", 1<<20)},
+		{name: "invalid UTF-8", message: string(invalid), wantRune: true},
+		{name: "NUL", message: strings.Repeat("x\x00", 1<<19), wantRune: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := &preallocatedError{message: test.message}
+			runtime.GC()
+			var before, after runtime.MemStats
+			runtime.ReadMemStats(&before)
+			message := boundedFailure(err)
+			runtime.ReadMemStats(&after)
+			runtime.KeepAlive(err)
+
+			if err.calls != 1 {
+				t.Fatalf("Error() calls = %d, want 1", err.calls)
+			}
+			allocated := after.TotalAlloc - before.TotalAlloc
+			t.Logf("source=%d_bytes allocated=%d_bytes result=%d_bytes", len(test.message), allocated, len(message))
+			if allocated >= uint64(len(test.message))/2 {
+				t.Fatalf("boundedFailure allocated %d bytes for %d-byte source", allocated, len(test.message))
+			}
+			if len(message) > MaxFailureBytes || !utf8.ValidString(message) || strings.IndexByte(message, 0) >= 0 {
+				t.Fatalf("boundedFailure result invalid: bytes=%d valid=%t NUL=%d", len(message), utf8.ValidString(message), strings.IndexByte(message, 0))
+			}
+			if !strings.HasSuffix(message, "…") {
+				t.Fatalf("boundedFailure suffix = %q, want ellipsis", message[len(message)-3:])
+			}
+			if test.wantRune && !strings.ContainsRune(message, utf8.RuneError) {
+				t.Fatal("boundedFailure did not redact malformed input")
+			}
+		})
 	}
 }
 

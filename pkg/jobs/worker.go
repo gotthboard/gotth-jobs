@@ -48,7 +48,8 @@ var (
 // Complexity: for c claim cycles and total handler/database work H, time
 // O(c)+H, Omega(1), with no finite tight bound because ctx controls lifetime;
 // auxiliary space O(1), Omega(1), tight Theta(1) beyond one copied job payload
-// and one bounded heartbeat goroutine.
+// plus one MaxFailureBytes normalization buffer and one bounded heartbeat
+// goroutine.
 func (worker Worker) Run(ctx context.Context) error {
 	if ctx == nil {
 		return fmt.Errorf("%w: context is required", ErrInvalid)
@@ -135,7 +136,7 @@ func (worker Worker) validate() error {
 // count; total time includes handler H plus h delegated constant-response
 // heartbeat calls and one cancellation/join plus one completion/failure call;
 // auxiliary space O(1), Omega(1), tight Theta(1) beyond the handler's own
-// space.
+// space, with failure normalization capped at MaxFailureBytes source bytes.
 func (worker Worker) runAttempt(ctx context.Context, job Job) error {
 	attemptContext, cancel := context.WithCancelCause(ctx)
 	stopHeartbeat := make(chan struct{})
@@ -243,20 +244,29 @@ func callHandler(ctx context.Context, handler Handler, job Job) (err error) {
 	return handler(ctx, job)
 }
 
-// boundedFailure converts arbitrary error text into valid UTF-8 without NULs
-// and truncates it on a rune boundary with an explicit ellipsis.
+// boundedFailure converts a bounded prefix of arbitrary error text into valid
+// UTF-8 without NULs and truncates it on a rune boundary with an ellipsis.
 //
-// Complexity: for n error bytes, time O(n), Omega(n), tight Theta(n);
-// auxiliary space O(n), Omega(n), tight Theta(n).
+// Complexity: err.Error() is delegated. After it returns n bytes, local time is
+// tight Theta(1+min(n, MaxFailureBytes)) and auxiliary space is
+// O(MaxFailureBytes), both independent of the full source length once capped.
 func boundedFailure(err error) string {
-	message := strings.ToValidUTF8(err.Error(), "�")
+	const suffix = "…"
+	source := err.Error()
+	sourceLimit := MaxFailureBytes
+	truncated := len(source) > sourceLimit
+	if truncated {
+		sourceLimit -= len(suffix)
+	}
+	source = source[:min(len(source), sourceLimit)]
+
+	message := strings.ToValidUTF8(source, "�")
 	message = strings.ReplaceAll(message, "\x00", "�")
-	if len(message) <= MaxFailureBytes {
+	if !truncated && len(message) <= MaxFailureBytes {
 		return message
 	}
-	const suffix = "…"
-	end := MaxFailureBytes - len(suffix)
-	for end > 0 && !utf8.ValidString(message[:end]) {
+	end := min(len(message), MaxFailureBytes-len(suffix))
+	for end < len(message) && end > 0 && !utf8.RuneStart(message[end]) {
 		end--
 	}
 	return message[:end] + suffix
